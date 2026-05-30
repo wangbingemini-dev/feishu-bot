@@ -33,7 +33,7 @@ def reply_feishu_message(message_id, text_content):
 
 def process_message(message_id, user_text):
     # 这里在后台慢慢请求 Gemini，完全不怕飞书超时
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     payload = {"contents": [{"parts": [{"text": user_text}]}]}
     
