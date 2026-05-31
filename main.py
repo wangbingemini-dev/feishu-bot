@@ -101,15 +101,32 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     if "header" in data and "event" in data:
         if data["header"].get("event_type") == "im.message.receive_v1":
             message = data["event"]["message"]
+            msg_type = message.get("message_type")
+            content_dict = json.loads(message["content"])
+            user_text = ""
             
-            # 只处理普通文本消息
-            if message["message_type"] == "text":
-                user_text = json.loads(message["content"]).get("text", "")
+            # ================= 新增：全面兼容长文本解析 =================
+            # 1. 解析普通短文本
+            if msg_type == "text":
+                user_text = content_dict.get("text", "")
                 
-                # 💡 获取这段对话的唯一 ID (单聊或群聊)
+            # 2. 解析飞书长文本（富文本 post 格式）
+            elif msg_type == "post":
+                # 飞书的 post 是一个复杂的嵌套列表，我们需要把它剥开
+                for paragraph in content_dict.get("content", []):
+                    for element in paragraph:
+                        # 提取纯文字部分
+                        if element.get("tag") == "text":
+                            user_text += element.get("text", "")
+                        # 提取超链接中的文字
+                        elif element.get("tag") == "a":
+                            user_text += element.get("text", "")
+                    user_text += "\n"  # 还原段落换行
+            # =========================================================
+
+            # 只要成功提取到了文字，就派发给大脑去处理
+            if user_text.strip():
                 chat_id = message.get("chat_id")
-                
-                # 将 chat_id 传给后台任务
                 background_tasks.add_task(process_message, message["message_id"], user_text, chat_id)
                 
     return {"status": "success"}
