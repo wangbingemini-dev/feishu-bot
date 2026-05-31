@@ -91,40 +91,51 @@ def process_message(message_id, user_text, chat_id):
 async def root():
     return {"message": "飞书 Gemini 机器人已开启记忆功能！"}
 
+# ================= 新增：暴力递归文字提取器 =================
+def extract_all_text(parsed_data):
+    """不管飞书嵌套多少层，把所有隐藏的纯文字全部榨取出来"""
+    text_list = []
+    
+    def traverse(node):
+        if isinstance(node, dict):
+            # 只要节点里有 'text' 这个键，并且是字符串，就全部抓取
+            if "text" in node and isinstance(node["text"], str):
+                text_list.append(node["text"])
+            # 继续往下层翻找
+            for key, value in node.items():
+                if key != "text":  # 避免重复
+                    traverse(value)
+        elif isinstance(node, list):
+            for item in node:
+                traverse(item)
+            # 一个列表通常代表一个段落结束，加个换行符保证排版不乱
+            text_list.append("\n")
+
+    traverse(parsed_data)
+    return "".join(text_list).strip()
+# =========================================================
+
 @app.post("/webhook")
 async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     
+    # 飞书网址验证
     if "challenge" in data:
         return {"challenge": data["challenge"]}
     
     if "header" in data and "event" in data:
         if data["header"].get("event_type") == "im.message.receive_v1":
             message = data["event"]["message"]
-            msg_type = message.get("message_type")
-            content_dict = json.loads(message["content"])
-            user_text = ""
             
-            # ================= 新增：全面兼容长文本解析 =================
-            # 1. 解析普通短文本
-            if msg_type == "text":
-                user_text = content_dict.get("text", "")
+            try:
+                # 把飞书发来的加密内容解开
+                content_dict = json.loads(message["content"])
+                # 核心改变：直接丢进暴力提取器，无视所有排版格式！
+                user_text = extract_all_text(content_dict)
+            except Exception as e:
+                user_text = ""
                 
-            # 2. 解析飞书长文本（富文本 post 格式）
-            elif msg_type == "post":
-                # 飞书的 post 是一个复杂的嵌套列表，我们需要把它剥开
-                for paragraph in content_dict.get("content", []):
-                    for element in paragraph:
-                        # 提取纯文字部分
-                        if element.get("tag") == "text":
-                            user_text += element.get("text", "")
-                        # 提取超链接中的文字
-                        elif element.get("tag") == "a":
-                            user_text += element.get("text", "")
-                    user_text += "\n"  # 还原段落换行
-            # =========================================================
-
-            # 只要成功提取到了文字，就派发给大脑去处理
+            # 只要成功提取到了哪怕一个字，就派发给大脑处理
             if user_text.strip():
                 chat_id = message.get("chat_id")
                 background_tasks.add_task(process_message, message["message_id"], user_text, chat_id)
