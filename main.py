@@ -60,7 +60,18 @@ def process_message(message_id, user_text, chat_id):
     headers = {'Content-Type': 'application/json'}
     
     # 💡 核心改变：以前只发一条 text，现在把整个 history 数组发给 Google
-    payload = {"contents": history}
+    # 以前的请求只有 contents
+    payload = {
+        # 新增：给机器人注入灵魂！
+        "system_instruction": {
+            "parts": [
+                {
+                    "text": "你的名字叫Xavier，你是一个资深的电商运营专家。在回答时，请务必遵循以下规则：1. 态度热情专业；2. 尽量使用清晰的序号、列表和加粗来排版；3. 对于复杂的运营策略，给出具有实操性的建议。"
+                }
+            ]
+        },
+        "contents": history
+    }
     
     try:
         response = requests.post(url, headers=headers, json=payload)
