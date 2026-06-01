@@ -1,3 +1,4 @@
+import time
 import os
 import json
 import requests
@@ -39,7 +40,7 @@ def reply_feishu_message(message_id, text_content):
     requests.post(url, headers=headers, json=payload)
 
 def process_message(message_id, user_text, chat_id):
-    """处理消息，包含上下文记忆"""
+    """处理消息，包含上下文记忆及自动重试机制"""
     global chat_history
     
     # 1. 获取该聊天的历史记录，如果没有则新建空列表
@@ -55,14 +56,12 @@ def process_message(message_id, user_text, chat_id):
     if len(history) > MAX_HISTORY_LENGTH:
         history = history[-MAX_HISTORY_LENGTH:]
 
-    # 4. 请求 Gemini (建议在这里使用 2.5-flash，若需深度推理可换 2.5-pro)
+    # 4. 请求 Gemini
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
     
-    # 💡 核心改变：以前只发一条 text，现在把整个 history 数组发给 Google
-    # 以前的请求只有 contents
+    # 💡 组装带有“灵魂”和“记忆”的数据包
     payload = {
-        # 新增：给机器人注入灵魂！
         "system_instruction": {
             "parts": [
                 {
@@ -73,29 +72,54 @@ def process_message(message_id, user_text, chat_id):
         "contents": history
     }
     
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            result = response.json()
-            gemini_reply = result['candidates'][0]['content']['parts'][0]['text']
+    # ================= 核心优化：自动重试机制 =================
+    max_retries = 3  # 最多尝试 3 次
+    gemini_reply = ""
+    
+    for attempt in range(max_retries):
+        try:
+            # 增加 timeout 防止网络死锁卡住
+            response = requests.post(url, headers=headers, json=payload, timeout=15)
             
-            # 5. 如果请求成功，把机器人的回复也存进记忆里
-            history.append({
-                "role": "model",
-                "parts": [{"text": gemini_reply}]
-            })
-            # 更新大脑缓存
-            chat_history[chat_id] = history
+            # 情况一：请求成功
+            if response.status_code == 200:
+                result = response.json()
+                gemini_reply = result['candidates'][0]['content']['parts'][0]['text']
+                
+                # 如果请求成功，把机器人的回复也存进记忆里
+                history.append({
+                    "role": "model",
+                    "parts": [{"text": gemini_reply}]
+                })
+                # 更新大脑缓存
+                chat_history[chat_id] = history
+                break  # 拿到了结果，立刻跳出重试循环
+                
+            # 情况二：撞上 503 拥堵 或 429 限流
+            elif response.status_code in [503, 429]:
+                print(f"⚠️ API 繁忙 (状态码: {response.status_code})，正在进行第 {attempt + 1} 次重试...")
+                time.sleep(2)  # 休息 2 秒后再次敲门
+                
+                # 如果是最后一次尝试依然失败
+                if attempt == max_retries - 1:
+                    history.pop() # 把刚才放进去的用户问题弹出来，避免记忆错乱
+                    gemini_reply = "🤖 Google 服务器当前太拥挤啦，Xavier 试了3次都没挤进去通道，请稍等半分钟后再把刚才的话发给我一次哦！"
+                    
+            # 情况三：其他无法通过重试解决的硬性错误 (如 400 参数错误)
+            else:
+                history.pop() # 弹出问题
+                gemini_reply = f"API报错: {response.status_code} - {response.text}"
+                break
+                
+        # 情况四：Render 服务器自身的网络波动异常
+        except Exception as e:
+            if history: history.pop()
+            gemini_reply = f"网络连接异常: {str(e)}"
+            break
             
-        else:
-            # 报错时，为了防止死循环，把刚刚加进去的用户问题弹出来
-            history.pop() 
-            gemini_reply = f"API报错: {response.status_code} - {response.text}"
-            
-    except Exception as e:
-        if history: history.pop()
-        gemini_reply = f"网络错误: {str(e)}"
+    # ==========================================================
         
+    # 5. 把最终结果发送给飞书
     reply_feishu_message(message_id, gemini_reply)
 
 @app.get("/")
