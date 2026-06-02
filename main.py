@@ -230,13 +230,20 @@ async def receive_bitable_data(request: Request):
 
         # 路由 B：如果是【品类GSV同比数据】发来的
         elif source_table == "category_gsv":
-            # 提取专属字段
-            month = data.get("month")
-            gsv = data.get("gsv_value")
-            # 存入 TiDB 里对应的 category_gsv_table
-            sql = "INSERT INTO category_gsv_table (month, gsv) VALUES (%s, %s)"
-            cursor.execute(sql, (month, gsv))
-            print(f"✅ 成功同步一条 [GSV同比] 数据: {month} - {gsv}")
+            # 提取专属字段（名字必须和飞书 JSON 里左边的名字一模一样）
+            record_time = data.get("record_time")
+            category = data.get("category")
+            # 兼容处理：飞书传过来的金额可能是带逗号的字符串，比如 "1,000.00"
+            # 去除逗号，防止数据库报错
+            gsv = str(data.get("gsv", "0")).replace(",", "")
+            last_year_gsv = str(data.get("last_year_gsv", "0")).replace(",", "")
+            yoy_ratio = data.get("yoy_ratio")
+            
+            # 存入 TiDB 
+            sql = "INSERT INTO category_gsv_table (record_time, category, gsv, last_year_gsv, yoy_ratio) VALUES (%s, %s, %s, %s, %s)"
+            cursor.execute(sql, (record_time, category, gsv, last_year_gsv, yoy_ratio))
+            
+            print(f"✅ 成功同步一条 [GSV同比] 数据: {record_time} - {category}")
             
         # 路由 C：可以无限往下加...
         
