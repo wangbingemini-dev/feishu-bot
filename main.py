@@ -25,7 +25,7 @@ def get_db_connection():
         cursorclass=pymysql.cursors.DictCursor
     )
 
-def load_history_from_db(chat_id, limit=20):
+def load_history_from_db(chat_id, limit=40):
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
