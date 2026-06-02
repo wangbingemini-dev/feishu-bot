@@ -3,6 +3,7 @@ import os
 import json
 import requests
 import pymysql
+import re
 from fastapi import FastAPI, Request, BackgroundTasks
 
 app = FastAPI()
@@ -19,42 +20,25 @@ DB_NAME = os.environ.get("DB_NAME", "test")
 
 # ================= 2. 数据库操作工具 =================
 def get_db_connection():
-    """建立与 TiDB Serverless 的连接"""
     return pymysql.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASS,
-        database=DB_NAME,
+        host=DB_HOST, user=DB_USER, password=DB_PASS, database=DB_NAME,
         cursorclass=pymysql.cursors.DictCursor
     )
 
-def load_history_from_db(chat_id, limit=40):
-    """从数据库读取最近的记忆并正序排列"""
+def load_history_from_db(chat_id, limit=20):
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
-            # 倒序取最新的 limit 条
             sql = "SELECT role, content FROM chat_records WHERE chat_id = %s ORDER BY id DESC LIMIT %s"
             cursor.execute(sql, (chat_id, limit))
             records = cursor.fetchall()
-            
-            history = []
-            # 翻转回正序，供大模型阅读
-            for row in reversed(records):
-                history.append({
-                    "role": row["role"],
-                    "parts": [{"text": row["content"]}]
-                })
-            return history
-    except Exception as e:
-        print(f"读取数据库失败: {e}")
+            return [{"role": row["role"], "parts": [{"text": row["content"]}]} for row in reversed(records)]
+    except:
         return []
     finally:
-        if 'conn' in locals() and conn.open:
-            conn.close()
+        if 'conn' in locals() and conn.open: conn.close()
 
 def save_message_to_db(chat_id, role, content):
-    """保存单条消息到数据库"""
     try:
         conn = get_db_connection()
         with conn.cursor() as cursor:
@@ -62,145 +46,177 @@ def save_message_to_db(chat_id, role, content):
             cursor.execute(sql, (chat_id, role, content))
         conn.commit()
     except Exception as e:
-        print(f"保存数据库失败: {e}")
+        print(f"保存记录失败: {e}")
     finally:
-        if 'conn' in locals() and conn.open:
-            conn.close()
+        if 'conn' in locals() and conn.open: conn.close()
 
-# ================= 3. 飞书通信工具 =================
-def get_tenant_access_token():
-    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-    headers = {"Content-Type": "application/json; charset=utf-8"}
-    data = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
+# ================= 3. 🌟 新增：数据库超能力 =================
+def get_database_schema():
+    """动态获取当前数据库中所有的表名和字段，告诉大模型全库结构"""
     try:
-        response = requests.post(url, headers=headers, json=data)
-        return response.json().get("tenant_access_token")
-    except:
-        return None
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SHOW TABLES")
+            tables = [list(row.values())[0] for row in cursor.fetchall()]
+            if not tables:
+                return "当前数据库没有任何表。"
+            
+            schema_info = "【你的数据库表结构说明】\n"
+            for table in tables:
+                # 排除用来存聊天记录的表，防止它拿聊天记录胡说八道
+                if table == 'chat_records': 
+                    continue
+                cursor.execute(f"DESCRIBE {table}")
+                columns = [f"{row['Field']}({row['Type']})" for row in cursor.fetchall()]
+                schema_info += f"表名: {table} | 包含字段: {', '.join(columns)}\n"
+            return schema_info
+    except Exception as e:
+        return f"获取结构失败: {e}"
+    finally:
+        if 'conn' in locals() and conn.open: conn.close()
+
+def execute_ai_sql(sql):
+    """执行大模型自己写的 SQL 语句，并配备安全锁"""
+    sql = sql.strip()
+    # 🚨 终极安全锁：绝对禁止 AI 执行删除(DELETE)或修改(UPDATE)等危险操作！
+    if not sql.upper().startswith("SELECT"):
+        return "操作被拒绝：出于数据安全考虑，你只能执行 SELECT 查询语句。"
+    
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(sql)
+            records = cursor.fetchall()
+            # 截断结果防止过大撑爆 API (最多给 AI 看最新的 30 条)
+            if len(records) > 30:
+                return f"{records[:30]}\n...(共查询到 {len(records)} 条数据，其余已隐藏)"
+            return str(records)
+    except Exception as e:
+        return f"SQL执行报错: {e}，请检查你的 SQL 语法后重试。"
+    finally:
+        if 'conn' in locals() and conn.open: conn.close()
+
+# ================= 4. 飞书通信与文字提取工具 =================
+def get_tenant_access_token():
+    try:
+        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        data = {"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}
+        return requests.post(url, headers={"Content-Type": "application/json"}, json=data).json().get("tenant_access_token")
+    except: return None
 
 def reply_feishu_message(message_id, text_content):
     token = get_tenant_access_token()
-    if not token: 
-        return
-    url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json; charset=utf-8"
-    }
-    payload = {"msg_type": "text", "content": json.dumps({"text": text_content})}
-    requests.post(url, headers=headers, json=payload)
+    if token:
+        url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
+        payload = {"msg_type": "text", "content": json.dumps({"text": text_content})}
+        requests.post(url, headers=headers, json=payload)
 
-# ================= 4. 暴力文字提取器 =================
 def extract_all_text(parsed_data):
-    """不管飞书嵌套多少层，把所有隐藏的纯文字全部榨取出来"""
     text_list = []
-    
     def traverse(node):
         if isinstance(node, dict):
-            if "text" in node and isinstance(node["text"], str):
-                text_list.append(node["text"])
-            for key, value in node.items():
-                if key != "text":
-                    traverse(value)
+            if "text" in node and isinstance(node["text"], str): text_list.append(node["text"])
+            for k, v in node.items():
+                if k != "text": traverse(v)
         elif isinstance(node, list):
-            for item in node:
-                traverse(item)
+            for item in node: traverse(item)
             text_list.append("\n")
-
     traverse(parsed_data)
     return "".join(text_list).strip()
 
-# ================= 5. 核心：大模型处理大脑 =================
-def process_message(message_id, user_text, chat_id):
-    """处理消息，包含数据库记忆及自动重试机制"""
-    
-    # 1. 从数据库捞出最近 20 条对话记忆
-    history = load_history_from_db(chat_id, limit=20)
-    
-    # 2. 将当前用户的新问题，放进发给大模型的包裹里
-    history.append({
-        "role": "user",
-        "parts": [{"text": user_text}]
-    })
-
-    # 3. 组装请求参数
+# ================= 5. 核心：大模型智能体引擎 =================
+def call_gemini_api(payload):
+    """专门负责向 Gemini 发送请求并处理重试的网络组件"""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {'Content-Type': 'application/json'}
+    for _ in range(3):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=40)
+            if response.status_code == 200:
+                return response.json()['candidates'][0]['content']['parts'][0]['text']
+            elif response.status_code in [503, 429]:
+                time.sleep(2)
+        except Exception as e:
+            print(f"API 请求波动: {e}")
+    return "🤖 Google 服务器当前太拥挤啦，Xavier 试了 3 次都没进去，请稍等半分钟再试哦！"
+
+def process_message(message_id, user_text, chat_id):
+    history = load_history_from_db(chat_id, limit=20)
+    history.append({"role": "user", "parts": [{"text": user_text}]})
+    
+    # 动态获取全库表结构，注入灵魂
+    db_schema = get_database_schema()
+    sys_instruction = f"""你的名字叫Xavier，你是一个资深的电商运营专家。
+你的大脑已直连公司的 TiDB 云数据库。以下是你目前可以随时查询的所有表结构：
+{db_schema}
+
+【核心指令：如何调取真实数据】
+1. 当你需要结合真实数据来回答问题时，请务必自己编写 MySQL SQL 语句去查询。
+2. 如果你要查数据，请严格按照以下格式输出你的请求（必须使用 [SQL] 和 [/SQL] 包裹，且不要输出任何多余废话）：
+[SQL]
+SELECT * FROM table_name ORDER BY id DESC LIMIT 10;
+[/SQL]
+3. 系统会拦截这段 SQL 并去数据库执行，然后把真实数字返回给你。拿到数字后，你再给用户专业的最终解答。
+4. 如果用户只是闲聊，不需要查数据，请直接正常回答。
+"""
+    
     payload = {
-        "system_instruction": {
-            "parts": [
-                {
-                    "text": "你的名字叫Xavier，你是一个资深的电商运营专家。在回答时，请务必遵循以下规则：1. 态度热情专业；2. 尽量使用清晰的序号、列表和加粗来排版；3. 对于复杂的运营策略，给出具有实操性的建议。"
-                }
-            ]
-        },
+        "system_instruction": {"parts": [{"text": sys_instruction}]},
         "contents": history
     }
     
-    # 4. 请求 Gemini (带 3 次重试保护)
-    max_retries = 3
-    gemini_reply = ""
+    # 第 1 步：尝试获取大模型初步思考结果
+    gemini_reply = call_gemini_api(payload)
     
-    for attempt in range(max_retries):
-        try:
-            # timeout 放宽到 40 秒，防止思考长文时断连
-            response = requests.post(url, headers=headers, json=payload, timeout=40)
+    # 第 2 步：拦截器判断 - 大模型是不是想查数据库？
+    if "[SQL]" in gemini_reply and "[/SQL]" in gemini_reply:
+        print(f"🤖 AI 决定查询数据库，原始输出: {gemini_reply}")
+        
+        # 提取 SQL 语句
+        sql_match = re.search(r'\[SQL\](.*?)\[/SQL\]', gemini_reply, re.DOTALL)
+        if sql_match:
+            sql_query = sql_match.group(1).strip()
             
-            if response.status_code == 200:
-                result = response.json()
-                gemini_reply = result['candidates'][0]['content']['parts'][0]['text']
-                
-                # 💡【核心逻辑优化】：只有大模型成功回复了，才把"用户的问题"和"大模型的回答"成对存入数据库！
-                # 这样可以绝对避免 API 失败时，数据库里存了两个连续的 user 发言导致后续崩溃。
-                save_message_to_db(chat_id, "user", user_text)
-                save_message_to_db(chat_id, "model", gemini_reply)
-                
-                break  # 成功，跳出循环
-                
-            elif response.status_code in [503, 429]:
-                print(f"⚠️ API 繁忙 (状态码: {response.status_code})，正在进行第 {attempt + 1} 次重试...")
-                time.sleep(2)
-                if attempt == max_retries - 1:
-                    gemini_reply = "🤖 Google 服务器当前太拥挤啦，Xavier 试了3次都没挤进去通道，请稍等半分钟后再把刚才的话发给我一次哦！"
-            else:
-                gemini_reply = f"API报错: {response.status_code} - {response.text}"
-                break
-                
-        except Exception as e:
-            gemini_reply = f"网络连接异常: {str(e)}"
-            break
+            # 去 TiDB 执行查询
+            db_data = execute_ai_sql(sql_query)
+            print(f"📊 数据库执行结果已返回给 AI: {db_data[:100]}...")
             
-    # 5. 回复飞书用户
+            # 把“AI的查询动作”和“数据库的结果”放入临时上下文中
+            history.append({"role": "model", "parts": [{"text": gemini_reply}]})
+            history.append({"role": "user", "parts": [{"text": f"系统已成功执行你的SQL。查询结果如下:\n{db_data}\n\n请严格基于以上真实数据，回答我最初的问题。"}]})
+            
+            # 拿着带有结果的数据，发起第 2 次请求，获取最终答案
+            payload["contents"] = history
+            gemini_reply = call_gemini_api(payload)
+
+    # 第 3 步：把最终对话结果存入永久记忆库，并回复飞书
+    # (注意：中间查 SQL 的思考过程不会存进数据库污染记录，只存一问一答)
+    if "Google 服务器当前太拥挤啦" not in gemini_reply:
+        save_message_to_db(chat_id, "user", user_text)
+        save_message_to_db(chat_id, "model", gemini_reply)
+        
     reply_feishu_message(message_id, gemini_reply)
 
 # ================= 6. Webhook 路由 =================
 @app.get("/")
 async def root():
-    return {"message": "Xavier 电商专家（数据库记忆版）已成功上线运行中！"}
+    return {"message": "Xavier AI Agent (动态全库检索版) 已上线！"}
 
 @app.post("/webhook")
 async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
-    
-    if "challenge" in data:
-        return {"challenge": data["challenge"]}
-    
-    if "header" in data and "event" in data:
-        if data["header"].get("event_type") == "im.message.receive_v1":
-            message = data["event"]["message"]
-            
-            try:
-                content_dict = json.loads(message["content"])
-                # 开启吸尘器模式，提取长文中的所有文字
-                user_text = extract_all_text(content_dict)
-            except Exception:
-                user_text = ""
-                
-            if user_text.strip():
-                chat_id = message.get("chat_id")
-                background_tasks.add_task(process_message, message["message_id"], user_text, chat_id)
-                
+    if "challenge" in data: return {"challenge": data["challenge"]}
+    if "header" in data and data["header"].get("event_type") == "im.message.receive_v1":
+        message = data["event"]["message"]
+        try:
+            content_dict = json.loads(message["content"])
+            user_text = extract_all_text(content_dict)
+        except Exception: user_text = ""
+        if user_text.strip():
+            background_tasks.add_task(process_message, message["message_id"], user_text, message.get("chat_id"))
     return {"status": "success"}
+
 # ================= 7. 接收飞书多维表格数据的专属通道 (多表智能路由版) =================
 @app.post("/bitable-sync")
 async def receive_bitable_data(request: Request):
