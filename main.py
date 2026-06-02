@@ -201,3 +201,57 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
                 background_tasks.add_task(process_message, message["message_id"], user_text, chat_id)
                 
     return {"status": "success"}
+# ================= 7. 接收飞书多维表格数据的专属通道 (多表智能路由版) =================
+@app.post("/bitable-sync")
+async def receive_bitable_data(request: Request):
+    try:
+        # 1. 接收飞书推过来的所有数据
+        data = await request.json()
+        
+        # 2. 提取“数据来源标签” (如果在飞书里没配这个字段，默认是 unknown)
+        source_table = data.get("source_table", "unknown")
+        
+        # 3. 开启数据库连接
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # ------------------ 分拣逻辑开始 ------------------
+        
+        # 路由 A：如果是【昆仑系列销售数据】发来的
+        if source_table == "kunlun_sales":
+            # 提取专属字段
+            date = data.get("date")
+            model = data.get("model")
+            sales = data.get("sales")
+            # 存入 TiDB 里对应的 kunlun_sales_table (需提前在数据库建好这张表)
+            sql = "INSERT INTO kunlun_sales_table (date, model, sales) VALUES (%s, %s, %s)"
+            cursor.execute(sql, (date, model, sales))
+            print(f"✅ 成功同步一条 [昆仑系列] 数据: {model} - {sales}")
+
+        # 路由 B：如果是【品类GSV同比数据】发来的
+        elif source_table == "category_gsv":
+            # 提取专属字段
+            month = data.get("month")
+            gsv = data.get("gsv_value")
+            # 存入 TiDB 里对应的 category_gsv_table
+            sql = "INSERT INTO category_gsv_table (month, gsv) VALUES (%s, %s)"
+            cursor.execute(sql, (month, gsv))
+            print(f"✅ 成功同步一条 [GSV同比] 数据: {month} - {gsv}")
+            
+        # 路由 C：可以无限往下加...
+        
+        else:
+            print(f"⚠️ 收到未知来源的数据，未执行入库: {data}")
+            
+        # ------------------ 分拣逻辑结束 ------------------
+
+        # 提交并关闭数据库
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return {"status": "success", "message": f"Data routed for {source_table}"}
+        
+    except Exception as e:
+        print(f"❌ 数据同步失败: {e}")
+        return {"status": "error", "message": str(e)}
