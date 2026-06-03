@@ -111,8 +111,13 @@ def call_gemini_api(payload):
             response = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=45)
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
-            time.sleep(2)
-        except Exception as e: print(f"API 请求波动: {e}")
+            else:
+                # 🌟 新增的高音喇叭：如果 Google 拒绝，把真实的错误原因打印在日志里！
+                print(f"⚠️ Google 拒绝了请求！状态码: {response.status_code} | 报错详情: {response.text}")
+                time.sleep(2)
+        except Exception as e: 
+            print(f"API 网络层波动: {e}")
+            
     return "Xavier 的大脑正在高速运转，API 通道稍微有点拥堵，请半分钟后再问我一次！"
 
 def process_message(message_id, user_text, chat_id):
