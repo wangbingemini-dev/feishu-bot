@@ -126,45 +126,45 @@ def process_message(message_id, user_text, chat_id):
     
     db_schema = get_database_schema()
     
-    # 🌟 针对 6 张表的终极 System Prompt 优化
     sys_instruction = f"""你的名字叫Xavier，是全渠道净水器/厨房电器的顶级电商数据参谋。
 你的大脑已直连公司 TiDB 数据库，掌握着所有核心战报。以下是目前数据库的表结构：
 {db_schema}
 
 【查数指令规范 —— 极其重要！】
 1. 回答任何涉及数据的业务问题，务必自己写 MySQL 语句去查询真实数据。禁止瞎编。
-2. 📅 时间查询规则：数据库中的时间是极其标准的 DATE 格式（例如 '2026-04-01' 或 '2026-06-01'），请严格使用这种带横杠的 `YYYY-MM-DD` 格式进行 WHERE 筛选。
+2. 📅 时间查询规则：数据库中的时间是极其标准的 DATE 格式（例如 '2026-04-01'），请严格使用这种带横杠的 `YYYY-MM-DD` 格式进行 WHERE 筛选。
 3. 💰 数值计算规则：表中的 GSV 等金额字段已经是纯数字格式（DOUBLE），无需去除逗号，直接使用 SUM() 等函数计算即可。
-4. 🔍 全局视野：如果用户询问某一天的大盘或各品类对比，务必使用 GROUP BY 品类，把该日期下所有存在的品类（如冰箱、厨电、净水器等）全部汇总出来，不要遗漏。
-5. 输出 SQL 时，必须且只能用以下格式包裹：
-[SQL]
-SELECT * FROM table_name LIMIT 10;
-[/SQL]
+4. 🔍 全局视野：如果用户询问某一天的大盘或各品类对比，务必使用 GROUP BY 品类，把该日期下所有存在的品类（如冰箱、厨电、净水器等）全部汇总出来。
+5. 输出 SQL 时，请直接输出 SQL 语句。
 6. 系统执行后会把真实结果喂给你。拿到结果后，请用极具商业洞察的视角、分点、加粗的 Markdown 格式输出你的最终分析。
 """
     
     payload = {"system_instruction": {"parts": [{"text": sys_instruction}]}, "contents": history}
     
-    # 第 1 步：尝试让大模型思考，看它是否发出 SQL 查询暗号
+    # 第 1 步：尝试让大模型思考，生成 SQL
     gemini_reply = call_gemini_api(payload)
     
-    # 第 2 步：智能拦截器
+    # 🌟 第 2 步：升级版智能拦截器（同时兼容 [SQL] 和 ```sql）
+    sql_query = None
     if "[SQL]" in gemini_reply and "[/SQL]" in gemini_reply:
-        sql_match = re.search(r'\[SQL\](.*?)\[/SQL\]', gemini_reply, re.DOTALL)
-        if sql_match:
-            sql_query = sql_match.group(1).strip()
-            print(f"🤖 AI 生成了查询指令: {sql_query}")
-            
-            # 去数据库拿货
-            db_data = execute_ai_sql(sql_query)
-            
-            # 将数据库返回的冷冰冰的数据，作为新的上下文补充给 AI
-            history.append({"role": "model", "parts": [{"text": gemini_reply}]})
-            history.append({"role": "user", "parts": [{"text": f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于这些数据，用专业的排版直接回答我最初的业务问题。"}]})
-            
-            payload["contents"] = history
-            # 发起第 2 次 API 调用，获取人类能看懂的漂亮分析
-            gemini_reply = call_gemini_api(payload)
+        match = re.search(r'\[SQL\](.*?)\[/SQL\]', gemini_reply, re.DOTALL)
+        if match: sql_query = match.group(1).strip()
+    elif "```sql" in gemini_reply.lower() and "```" in gemini_reply:
+        match = re.search(r'```sql(.*?)```', gemini_reply, re.DOTALL | re.IGNORECASE)
+        if match: sql_query = match.group(1).strip()
+
+    if sql_query:
+        print(f"🤖 AI 生成了查询指令: {sql_query}")
+        
+        # 去数据库拿真实货源
+        db_data = execute_ai_sql(sql_query)
+        
+        # 把真实数据塞回给它，逼它重新算
+        history.append({"role": "model", "parts": [{"text": gemini_reply}]})
+        history.append({"role": "user", "parts": [{"text": f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于这些真实数据，直接回答我最初的业务问题，绝对禁止瞎编数字。"}]})
+        
+        payload["contents"] = history
+        gemini_reply = call_gemini_api(payload)
 
     # 第 3 步：沉淀记忆与回复飞书
     if "通道稍微有点拥堵" not in gemini_reply:
