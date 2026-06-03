@@ -136,7 +136,6 @@ SELECT * FROM table_name LIMIT 10;
 [/SQL]
 5. 系统执行后会把真实结果喂给你。拿到结果后，请用极具商业洞察的视角、分点、加粗的 Markdown 格式输出你的最终分析。
 """
-"""
     
     payload = {"system_instruction": {"parts": [{"text": sys_instruction}]}, "contents": history}
     
