@@ -4,11 +4,13 @@ import json
 import requests
 import pymysql
 import re
+from datetime import datetime
 from fastapi import FastAPI, Request, BackgroundTasks
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = FastAPI()
 
-# ================= 1. 环境变量配置 =================
+# ================= 1. 核心钥匙与环境变量 =================
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -18,92 +20,139 @@ DB_USER = os.environ.get("DB_USER")
 DB_PASS = os.environ.get("DB_PASS")
 DB_NAME = os.environ.get("DB_NAME", "test")
 
-# ================= 2. 数据库底层基建 =================
+# 你的飞书知识库外壳 Token
+WIKI_TOKEN = "Re61wxHP9iO5NFk6IshckxNYnKc"
+
+# ================= 2. 飞书数据地图 (智能字段翻译器) =================
+TABLE_CONFIGS = [
+    {"table_id": "tblWWoVwjP9l1xIG", "db_table": "daily_category_gsv", "mapping": {"时间": "record_date", "店铺": "shop", "品类": "category", "GSV": "gsv", "同期GSV": "last_year_gsv", "同比": "yoy_ratio", "目标": "target", "目标达成率": "achievement_rate"}},
+    {"table_id": "tbl6yvd1FSN5atno", "db_table": "category_gsv_table", "mapping": {"时间": "record_time", "品类": "category", "GSV": "gsv", "同期GSV": "last_year_gsv", "同比": "yoy_ratio"}},
+    {"table_id": "tbllTcE3CS2FdN5b", "db_table": "monthly_gsv_data", "mapping": {"月份": "record_month", "店铺": "shop", "品类": "category", "GSV合计": "gsv", "目标": "target", "达成率": "achievement_rate"}},
+    {"table_id": "tbl2MaSswe4Osoou", "db_table": "kunlun_sales", "mapping": {"月份": "record_month", "店铺": "shop", "商品id": "product_id", "产品名称": "product_name", "目标": "target", "达成率": "achievement_rate", "合计": "total_sales", "1日": "day_1", "2日": "day_2", "3日": "day_3", "4日": "day_4", "5日": "day_5", "6日": "day_6", "7日": "day_7", "8日": "day_8", "9日": "day_9", "10日": "day_10", "11日": "day_11", "12日": "day_12", "13日": "day_13", "14日": "day_14", "15日": "day_15", "16日": "day_16", "17日": "day_17", "18日": "day_18", "19日": "day_19", "20日": "day_20", "21日": "day_21", "22日": "day_22", "23日": "day_23", "24日": "day_24", "25日": "day_25", "26日": "day_26", "27日": "day_27", "28日": "day_28", "29日": "day_29", "30日": "day_30", "31日": "day_31"}},
+    {"table_id": "tbl4ehsa3xc0z5nq", "db_table": "xiaojinglong_sales", "mapping": {"月份": "record_month", "店铺": "shop", "商品id": "product_id", "产品名称": "product_name", "目标": "target", "达成率": "achievement_rate", "合计": "total_sales", "1日": "day_1", "2日": "day_2", "3日": "day_3", "4日": "day_4", "5日": "day_5", "6日": "day_6", "7日": "day_7", "8日": "day_8", "9日": "day_9", "10日": "day_10", "11日": "day_11", "12日": "day_12", "13日": "day_13", "14日": "day_14", "15日": "day_15", "16日": "day_16", "17日": "day_17", "18日": "day_18", "19日": "day_19", "20日": "day_20", "21日": "day_21", "22日": "day_22", "23日": "day_23", "24日": "day_24", "25日": "day_25", "26日": "day_26", "27日": "day_27", "28日": "day_28", "29日": "day_29", "30日": "day_30", "31日": "day_31"}},
+]
+
+# ================= 3. 底层基础组件 =================
 def get_db_connection():
-    # 增加 charset='utf8mb4' 彻底杜绝中文乱码问题
-    return pymysql.connect(
-        host=DB_HOST, user=DB_USER, password=DB_PASS, database=DB_NAME,
-        charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor
-    )
+    return pymysql.connect(host=DB_HOST, user=DB_USER, password=DB_PASS, database=DB_NAME, charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor)
 
-def load_history_from_db(chat_id, limit=15):
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            # 建表前提：确保你有 chat_records 这张表用来存聊天记忆
-            sql = "SELECT role, content FROM chat_records WHERE chat_id = %s ORDER BY id DESC LIMIT %s"
-            cursor.execute(sql, (chat_id, limit))
-            records = cursor.fetchall()
-            return [{"role": row["role"], "parts": [{"text": row["content"]}]} for row in reversed(records)]
-    except: return []
+def get_tenant_access_token():
+    url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+    res = requests.post(url, headers={"Content-Type": "application/json"}, json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}).json()
+    return res.get("tenant_access_token")
 
-def save_message_to_db(chat_id, role, content):
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            sql = "INSERT INTO chat_records (chat_id, role, content) VALUES (%s, %s, %s)"
-            cursor.execute(sql, (chat_id, role, content))
-        conn.commit()
-    except Exception as e: print(f"保存聊天记录失败: {e}")
+# ================= 4. 飞书主动定时抽水机核心逻辑 =================
+def get_real_app_token(wiki_token, token):
+    url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token={wiki_token}"
+    res = requests.get(url, headers={"Authorization": f"Bearer {token}"}).json()
+    if res.get("code") == 0: return res["data"]["node"]["obj_token"]
+    return wiki_token
 
-# ================= 3. AI 数据导览与安全执行器 =================
+def clean_feishu_value(v):
+    if v is None: return None
+    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict): return v[0].get("text", str(v))
+    if isinstance(v, (int, float)):
+        if v > 1000000000000:
+            return datetime.fromtimestamp(v / 1000.0).strftime('%Y-%m-%d')
+        return v
+    if isinstance(v, str): return v.replace(',', '')
+    return str(v)
+
+def run_full_sync():
+    print("🚀 [后台任务] 开始执行全量数据主动拉取...")
+    tenant_token = get_tenant_access_token()
+    if not tenant_token: return
+    
+    app_token = get_real_app_token(WIKI_TOKEN, tenant_token)
+    conn = get_db_connection()
+    
+    for config in TABLE_CONFIGS:
+        table_id = config["table_id"]
+        if "REPLACE" in table_id: continue
+        
+        db_table = config["db_table"]
+        mapping = config["mapping"]
+        records = []
+        has_more = True
+        page_token = ""
+        
+        while has_more:
+            url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records?page_size=500"
+            if page_token: url += f"&page_token={page_token}"
+            res = requests.get(url, headers={"Authorization": f"Bearer {tenant_token}"}).json()
+            if res.get("code") != 0: break
+            
+            items = res.get("data", {}).get("items", [])
+            for item in items: records.append(item.get("fields", {}))
+            
+            has_more = res.get("data", {}).get("has_more", False)
+            page_token = res.get("data", {}).get("page_token", "")
+            
+        if not records: continue
+        
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"TRUNCATE TABLE {db_table}")
+                
+                cols = list(mapping.values())
+                cols_str = ", ".join(cols)
+                placeholders = ", ".join(["%s"] * len(cols))
+                sql = f"INSERT INTO {db_table} ({cols_str}) VALUES ({placeholders})"
+                
+                insert_data = []
+                for rec in records:
+                    row = [clean_feishu_value(rec.get(feishu_col)) for feishu_col in mapping.keys()]
+                    insert_data.append(tuple(row))
+                
+                cursor.executemany(sql, insert_data)
+            conn.commit()
+            print(f"✅ [{db_table}] 成功拉取并覆盖 {len(records)} 条新数据！")
+        except Exception as e: print(f"❌ [{db_table}] 写入失败: {e}")
+        
+    conn.close()
+    print("🎉 全量同步执行完毕！")
+
+@app.on_event("startup")
+def start_scheduler():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(run_full_sync, 'interval', hours=2)
+    scheduler.start()
+
+@app.get("/force-sync")
+async def manual_sync(background_tasks: BackgroundTasks):
+    background_tasks.add_task(run_full_sync)
+    return {"status": "success", "message": "全量拉取同步已在后台启动！"}
+
+# ================= 5. Xavier AI 大脑查询与生成中枢 =================
 def get_database_schema():
-    """让大模型看一眼家里有多少矿（获取表名和列名）"""
+    conn = get_db_connection()
+    schema_info = ""
     try:
-        conn = get_db_connection()
         with conn.cursor() as cursor:
             cursor.execute("SHOW TABLES")
             tables = [list(row.values())[0] for row in cursor.fetchall()]
-            
-            schema_info = "【当前数据库结构】\n"
             for table in tables:
-                if table == 'chat_records': continue  # 不给它看聊天记录表
-                cursor.execute(f"DESCRIBE {table}")
-                columns = [f"{row['Field']}({row['Type']})" for row in cursor.fetchall()]
-                schema_info += f"- 表 {table}: 包含 {', '.join(columns)}\n"
-            return schema_info
-    except Exception as e: return f"获取数据库结构失败: {e}"
+                cursor.execute(f"SHOW COLUMNS FROM {table}")
+                cols = [row['Field'] for row in cursor.fetchall()]
+                schema_info += f"表名: {table}, 字段: {', '.join(cols)}\n"
+    except Exception as e:
+        print(f"获取表结构失败: {e}")
+    finally:
+        conn.close()
+    return schema_info
 
-def execute_ai_sql(sql):
-    """替 AI 跑腿查数据，并带上防删库手铐"""
-    sql = sql.strip()
-    if not sql.upper().startswith("SELECT"):
-        return "⚠️ 操作拒绝：安全限制生效，你只能执行 SELECT 语句读取数据，禁止修改或删除。"
+def execute_ai_sql(sql_query):
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
         with conn.cursor() as cursor:
-            cursor.execute(sql)
-            records = cursor.fetchall()
-            # 如果查询结果超过40条，截断一下防止把 Gemini 内存撑爆
-            if len(records) > 40: 
-                return f"{records[:40]}\n...(提示AI: 数据行数超过40条，仅展示部分，请使用 SUM/AVG/LIMIT 等函数优化你的 SQL)"
-            return str(records) if records else "查询执行成功，但结果为空（没有找到符合条件的数据）。"
-    except Exception as e: 
-        return f"❌ SQL执行报错: {e}。请检查你的 SQL 语法（例如字段名是否拼错）并重新思考。"
+            cursor.execute(sql_query)
+            result = cursor.fetchall()
+            return str(result)
+    except Exception as e:
+        return f"SQL执行报错: {e}"
+    finally:
+        conn.close()
 
-# ================= 4. 飞书通信基站 =================
-def reply_feishu_message(message_id, text_content):
-    try:
-        url_token = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
-        token = requests.post(url_token, headers={"Content-Type": "application/json"}, json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}).json().get("tenant_access_token")
-        if token:
-            url_reply = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
-            requests.post(url_reply, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json={"msg_type": "text", "content": json.dumps({"text": text_content})})
-    except Exception as e: print(f"飞书消息发送失败: {e}")
-
-def extract_all_text(parsed_data):
-    text_list = []
-    def traverse(node):
-        if isinstance(node, dict):
-            if "text" in node and isinstance(node["text"], str): text_list.append(node["text"])
-            for k, v in node.items():
-                if k != "text": traverse(v)
-        elif isinstance(node, list):
-            for item in node: traverse(item)
-    traverse(parsed_data)
-    return "".join(text_list).strip()
-
-# ================= 5. AI 大脑核心中枢 (Text-to-SQL 引擎) =================
 def call_gemini_api(payload):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     for _ in range(3):
@@ -112,7 +161,6 @@ def call_gemini_api(payload):
             if response.status_code == 200:
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             else:
-                # 🌟 新增的高音喇叭：如果 Google 拒绝，把真实的错误原因打印在日志里！
                 print(f"⚠️ Google 拒绝了请求！状态码: {response.status_code} | 报错详情: {response.text}")
                 time.sleep(2)
         except Exception as e: 
@@ -120,8 +168,20 @@ def call_gemini_api(payload):
             
     return "Xavier 的大脑正在高速运转，API 通道稍微有点拥堵，请半分钟后再问我一次！"
 
+def reply_feishu_message(message_id, text):
+    tenant_token = get_tenant_access_token()
+    url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
+    payload = {"msg_type": "text", "content": json.dumps({"text": text})}
+    requests.post(url, headers={"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}, json=payload)
+
+# 历史记录简化版（避免依赖特定表结构导致报错）
+history_memory = {}
+
 def process_message(message_id, user_text, chat_id):
-    history = load_history_from_db(chat_id, limit=15)
+    if chat_id not in history_memory:
+        history_memory[chat_id] = []
+    
+    history = history_memory[chat_id][-10:] # 保留最近10轮对话
     history.append({"role": "user", "parts": [{"text": user_text}]})
     
     db_schema = get_database_schema()
@@ -135,7 +195,7 @@ def process_message(message_id, user_text, chat_id):
 2. 📅 时间查询规则：数据库中的时间是极其标准的 DATE 格式（例如 '2026-04-01'），请严格使用这种带横杠的 `YYYY-MM-DD` 格式进行 WHERE 筛选。
 3. 💰 数值计算规则：表中的 GSV 等金额字段已经是纯数字格式（DOUBLE），无需去除逗号，直接使用 SUM() 等函数计算即可。
 4. 🔍 全局视野：如果用户询问某一天的大盘或各品类对比，务必使用 GROUP BY 品类，把该日期下所有存在的品类（如冰箱、厨电、净水器等）全部汇总出来。
-5. 输出 SQL 时，请直接输出 SQL 语句。
+5. 输出 SQL 时，请直接输出 SQL 语句，可以用 [SQL] 包裹，也可以用普通 Markdown 的 ```sql 格式。
 6. 系统执行后会把真实结果喂给你。拿到结果后，请用极具商业洞察的视角、分点、加粗的 Markdown 格式输出你的最终分析。
 """
     
@@ -144,7 +204,7 @@ def process_message(message_id, user_text, chat_id):
     # 第 1 步：尝试让大模型思考，生成 SQL
     gemini_reply = call_gemini_api(payload)
     
-    # 🌟 第 2 步：升级版智能拦截器（同时兼容 [SQL] 和 ```sql）
+    # 第 2 步：升级版智能拦截器（同时兼容 [SQL] 和 ```sql）
     sql_query = None
     if "[SQL]" in gemini_reply and "[/SQL]" in gemini_reply:
         match = re.search(r'\[SQL\](.*?)\[/SQL\]', gemini_reply, re.DOTALL)
@@ -168,58 +228,30 @@ def process_message(message_id, user_text, chat_id):
 
     # 第 3 步：沉淀记忆与回复飞书
     if "通道稍微有点拥堵" not in gemini_reply:
-        save_message_to_db(chat_id, "user", user_text)
-        save_message_to_db(chat_id, "model", gemini_reply)
+        history_memory[chat_id].append({"role": "user", "parts": [{"text": user_text}]})
+        history_memory[chat_id].append({"role": "model", "parts": [{"text": gemini_reply}]})
         
     reply_feishu_message(message_id, gemini_reply)
 
-# ================= 6. 飞书消息入口 =================
-@app.get("/")
-async def root(): return {"message": "Xavier AI (百万级BI引擎版) 已全功率运行"}
-
+# ================= 6. 飞书 Webhook 接收入口 =================
 @app.post("/webhook")
 async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
-    data = await request.json()
-    if "challenge" in data: return {"challenge": data["challenge"]}
-    if "header" in data and data["header"].get("event_type") == "im.message.receive_v1":
-        msg = data["event"]["message"]
-        try: user_text = extract_all_text(json.loads(msg["content"]))
-        except: user_text = ""
-        if user_text.strip():
-            background_tasks.add_task(process_message, msg["message_id"], user_text, msg.get("chat_id"))
-    return {"status": "success"}
-
-# ================= 7. 飞书多维表格【增量更新】通道 =================
-@app.post("/bitable-sync")
-async def receive_bitable_data(request: Request):
-    """
-    不管飞书发来的是日爆表还是月度表，只要JSON里有 table_name，这里就能智能匹配入库。
-    """
-    try:
-        data = await request.json()
-        table_name = data.pop("table_name", None)
-        if not table_name: return {"status": "error", "message": "缺失 table_name 字段"}
-            
-        cleaned_values = []
-        for v in data.values():
-            if v is None or str(v).strip() == "":
-                cleaned_values.append(None)
-            else:
-                cleaned_values.append(str(v).replace(",", "")) # 去除逗号
-                
-        keys = list(data.keys())
-        columns_str = ", ".join(keys)
-        placeholders_str = ", ".join(["%s"] * len(keys))
+    body = await request.json()
+    
+    # 飞书网关校验
+    if "challenge" in body:
+        return {"challenge": body["challenge"]}
         
-        sql = f"INSERT INTO {table_name} ({columns_str}) VALUES ({placeholders_str})"
+    event = body.get("event", {})
+    msg = event.get("message", {})
+    
+    message_id = msg.get("message_id")
+    chat_id = msg.get("chat_id")
+    
+    if msg.get("message_type") == "text":
+        content = json.loads(msg.get("content", "{}"))
+        user_text = content.get("text", "")
+        # 后台执行，防止飞书3秒超时报错
+        background_tasks.add_task(process_message, message_id, user_text, chat_id)
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(sql, tuple(cleaned_values))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
