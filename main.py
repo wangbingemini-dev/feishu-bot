@@ -23,18 +23,17 @@ DB_NAME = os.environ.get("DB_NAME", "test")
 # 你的飞书知识库外壳 Token
 WIKI_TOKEN = "Re61wxHP9iO5NFk6IshckxNYnKc"
 
-# ================= 2. 飞书数据地图 (智能字段翻译器) =================
+# 全局记忆体（用于防重复轰炸和对话上下文）
+history_memory = {}
+processed_message_ids = set()
+
+# ================= 2. 飞书数据地图 (全中文原味对齐版) =================
 TABLE_CONFIGS = [
     {"table_id": "tblWWoVwjP9l1xIG", "db_table": "daily_category_gsv", "mapping": {"时间": "时间", "店铺": "店铺", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比", "目标": "目标", "目标达成率": "目标达成率"}},
-    
     {"table_id": "tbl6yvd1FSN5atno", "db_table": "category_gsv_data", "mapping": {"时间": "时间", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比"}},
-    
     {"table_id": "tbllTcE3CS2FdN5b", "db_table": "month_gsv_data", "mapping": {"月份": "月份", "店铺": "店铺", "品类": "品类", "目标": "目标", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
-    
     {"table_id": "tbl2MaSswe4Osoou", "db_table": "kunlun_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
-    
     {"table_id": "tbl4ehsa3xc0z5nq", "db_table": "dragons1_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
-    
 ]
 
 # ================= 3. 底层基础组件 =================
@@ -46,7 +45,7 @@ def get_tenant_access_token():
     res = requests.post(url, headers={"Content-Type": "application/json"}, json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}).json()
     return res.get("tenant_access_token")
 
-# ================= 4. 飞书主动定时抽水机核心逻辑 =================
+# ================= 4. 飞书主动拉取与清洗核心逻辑 =================
 def get_real_app_token(wiki_token, token):
     url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token={wiki_token}"
     res = requests.get(url, headers={"Authorization": f"Bearer {token}"}).json()
@@ -57,30 +56,28 @@ def clean_feishu_value(v):
     """暴力清洗飞书嵌套格式，强行炼化数字，并修正北京时区"""
     if v is None or v == "": return None
     
-    # 第一层破壳
+    # 破除飞书俄罗斯套娃格式
     if isinstance(v, list) and len(v) > 0:
         if isinstance(v[0], dict):
             v = v[0].get("value", v[0].get("text", v[0]))
         else:
             v = v[0]
-            
-    # 第二层破壳
     if isinstance(v, dict):
         v = v.get("value", v.get("text", v))
 
-    # 🌟 修复时间穿越 Bug：强制按照北京时间（东八区）转换！
+    # 处理标准数字与修正北京时区
     if isinstance(v, (int, float)):
-        if v > 1000000000000: # 飞书毫秒级时间戳
+        if v > 1000000000000:
             dt = datetime.fromtimestamp(v / 1000.0, timezone.utc) + timedelta(hours=8)
             return dt.strftime('%Y-%m-%d')
         return float(v)
 
-    # 字符串处理与炼金术
+    # 字符串剔除杂质与强行数字炼化
     if isinstance(v, str): 
         cleaned = v.replace(',', '').replace('¥', '').replace('￥', '').replace('\xa0', '').strip()
         if not cleaned: return None
         try:
-            return float(cleaned) # 强行把 '33055.5' 变成 33055.5
+            return float(cleaned)
         except ValueError:
             return cleaned 
             
@@ -120,9 +117,10 @@ def run_full_sync():
         
         try:
             with conn.cursor() as cursor:
-                cursor.execute(f"TRUNCATE TABLE {db_table}")
+                cursor.execute(f"TRUNCATE TABLE {db_table}") # 清空旧表
                 
-                cols = list(mapping.values())
+                # 因为列名可能以数字开头，必须用反引号包裹保护
+                cols = [f"`{col}`" for col in mapping.values()]
                 cols_str = ", ".join(cols)
                 placeholders = ", ".join(["%s"] * len(cols))
                 sql = f"INSERT INTO {db_table} ({cols_str}) VALUES ({placeholders})"
@@ -132,17 +130,11 @@ def run_full_sync():
                     row = [clean_feishu_value(rec.get(feishu_col)) for feishu_col in mapping.keys()]
                     insert_data.append(tuple(row))
                 
-                # 👇 新增的终极抓包代码 👇
-                if db_table == "daily_category_gsv" and len(insert_data) > 0:
-                    print("\n================= 🚨 终极抓包现场 🚨 ==================")
-                    print(f"👀 飞书给的原始数据: {records[0]}")
-                    print(f"👀 清洗后准备入库的数据: {insert_data[0]}")
-                    print("========================================================\n")
-                
                 cursor.executemany(sql, insert_data)
             conn.commit()
             print(f"✅ [{db_table}] 成功拉取并覆盖 {len(records)} 条新数据！")
-        except Exception as e: print(f"❌ [{db_table}] 写入失败: {e}")
+        except Exception as e: 
+            print(f"❌ [{db_table}] 写入失败: {e}")
         
     conn.close()
     print("🎉 全量同步执行完毕！")
@@ -209,14 +201,11 @@ def reply_feishu_message(message_id, text):
     payload = {"msg_type": "text", "content": json.dumps({"text": text})}
     requests.post(url, headers={"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}, json=payload)
 
-# 历史记录简化版（避免依赖特定表结构导致报错）
-history_memory = {}
-
 def process_message(message_id, user_text, chat_id):
     if chat_id not in history_memory:
         history_memory[chat_id] = []
     
-    history = history_memory[chat_id][-10:] # 保留最近10轮对话
+    history = history_memory[chat_id][-10:]
     history.append({"role": "user", "parts": [{"text": user_text}]})
     
     db_schema = get_database_schema()
@@ -236,10 +225,8 @@ def process_message(message_id, user_text, chat_id):
     
     payload = {"system_instruction": {"parts": [{"text": sys_instruction}]}, "contents": history}
     
-    # 第 1 步：尝试让大模型思考，生成 SQL
     gemini_reply = call_gemini_api(payload)
     
-    # 第 2 步：升级版智能拦截器（同时兼容 [SQL] 和 ```sql）
     sql_query = None
     if "[SQL]" in gemini_reply and "[/SQL]" in gemini_reply:
         match = re.search(r'\[SQL\](.*?)\[/SQL\]', gemini_reply, re.DOTALL)
@@ -250,30 +237,25 @@ def process_message(message_id, user_text, chat_id):
 
     if sql_query:
         print(f"🤖 AI 生成了查询指令: {sql_query}")
-        
-        # 去数据库拿真实货源
         db_data = execute_ai_sql(sql_query)
         
-        # 把真实数据塞回给它，逼它重新算
         history.append({"role": "model", "parts": [{"text": gemini_reply}]})
         history.append({"role": "user", "parts": [{"text": f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于这些真实数据，直接回答我最初的业务问题，绝对禁止瞎编数字。"}]})
         
         payload["contents"] = history
         gemini_reply = call_gemini_api(payload)
 
-    # 第 3 步：沉淀记忆与回复飞书
     if "通道稍微有点拥堵" not in gemini_reply:
         history_memory[chat_id].append({"role": "user", "parts": [{"text": user_text}]})
         history_memory[chat_id].append({"role": "model", "parts": [{"text": gemini_reply}]})
         
     reply_feishu_message(message_id, gemini_reply)
 
-# ================= 6. 飞书 Webhook 接收入口 =================
+# ================= 6. 飞书 Webhook 接收入口 (防连环轰炸版) =================
 @app.post("/webhook")
 async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
     
-    # 飞书网关校验
     if "challenge" in body:
         return {"challenge": body["challenge"]}
         
@@ -284,9 +266,16 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     chat_id = msg.get("chat_id")
     
     if msg.get("message_type") == "text":
+        
+        # 🛡️ 拦截器：如果飞书因为超时重发，直接挡在门外
+        if message_id in processed_message_ids:
+            print(f"🛡️ 拦截到飞书重复发送的消息，已忽略: {message_id}")
+            return {"status": "ok"}
+            
+        processed_message_ids.add(message_id)
+        
         content = json.loads(msg.get("content", "{}"))
         user_text = content.get("text", "")
-        # 后台执行，防止飞书3秒超时报错
         background_tasks.add_task(process_message, message_id, user_text, chat_id)
         
     return {"status": "ok"}
