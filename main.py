@@ -4,7 +4,7 @@ import json
 import requests
 import pymysql
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, Request, BackgroundTasks
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -54,7 +54,7 @@ def get_real_app_token(wiki_token, token):
     return wiki_token
 
 def clean_feishu_value(v):
-    """暴力清洗飞书发来的各种奇葩嵌套格式，并强行炼化数字"""
+    """暴力清洗飞书嵌套格式，强行炼化数字，并修正北京时区"""
     if v is None or v == "": return None
     
     # 第一层破壳
@@ -68,23 +68,20 @@ def clean_feishu_value(v):
     if isinstance(v, dict):
         v = v.get("value", v.get("text", v))
 
-    # 处理标准数字与飞书毫秒级时间戳
+    # 🌟 修复时间穿越 Bug：强制按照北京时间（东八区）转换！
     if isinstance(v, (int, float)):
-        if v > 1000000000000:
-            return datetime.fromtimestamp(v / 1000.0).strftime('%Y-%m-%d')
+        if v > 1000000000000: # 飞书毫秒级时间戳
+            dt = datetime.fromtimestamp(v / 1000.0, timezone.utc) + timedelta(hours=8)
+            return dt.strftime('%Y-%m-%d')
         return float(v)
 
-    # 处理字符串（文本）
+    # 字符串处理与炼金术
     if isinstance(v, str): 
-        # 剔除所有的货币符号、逗号和各种隐藏的奇葩空格（如 \xa0）
         cleaned = v.replace(',', '').replace('¥', '').replace('￥', '').replace('\xa0', '').strip()
         if not cleaned: return None
-        
-        # 🌟 终极炼金术：如果它长得像数字，强制让 Python 把它变成纯浮点数！
         try:
-            return float(cleaned)
+            return float(cleaned) # 强行把 '33055.5' 变成 33055.5
         except ValueError:
-            # 如果转换失败（说明它是像 '2026-06-04' 或 '冰箱' 这样的纯文字），就保持原样返回
             return cleaned 
             
     return str(v)
