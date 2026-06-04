@@ -128,6 +128,13 @@ def run_full_sync():
                     row = [clean_feishu_value(rec.get(feishu_col)) for feishu_col in mapping.keys()]
                     insert_data.append(tuple(row))
                 
+                # 👇 新增的终极抓包代码 👇
+                if db_table == "daily_category_gsv" and len(insert_data) > 0:
+                    print("\n================= 🚨 终极抓包现场 🚨 ==================")
+                    print(f"👀 飞书给的原始数据: {records[0]}")
+                    print(f"👀 清洗后准备入库的数据: {insert_data[0]}")
+                    print("========================================================\n")
+                
                 cursor.executemany(sql, insert_data)
             conn.commit()
             print(f"✅ [{db_table}] 成功拉取并覆盖 {len(records)} 条新数据！")
