@@ -54,13 +54,32 @@ def get_real_app_token(wiki_token, token):
     return wiki_token
 
 def clean_feishu_value(v):
-    if v is None: return None
-    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], dict): return v[0].get("text", str(v))
+    """暴力清洗飞书发来的各种奇葩嵌套格式（透视俄罗斯套娃）"""
+    if v is None or v == "": return None
+    
+    # 第一层破壳：如果飞书传来的是个列表 (常见于查找列、公式列)
+    if isinstance(v, list) and len(v) > 0:
+        if isinstance(v[0], dict):
+            # 优先提取 'value' (纯数字)，如果没有再提取 'text' (文本)
+            v = v[0].get("value", v[0].get("text", v[0]))
+        else:
+            v = v[0]
+            
+    # 第二层破壳：如果传过来的是单个字典
+    if isinstance(v, dict):
+        v = v.get("value", v.get("text", v))
+
+    # 处理标准数字与时间戳
     if isinstance(v, (int, float)):
-        if v > 1000000000000:
+        if v > 1000000000000: # 飞书毫秒级时间戳转换
             return datetime.fromtimestamp(v / 1000.0).strftime('%Y-%m-%d')
         return v
-    if isinstance(v, str): return v.replace(',', '')
+
+    # 处理字符串（拔除逗号、货币符号等杂草）
+    if isinstance(v, str): 
+        cleaned = v.replace(',', '').replace('¥', '').replace('￥', '').strip()
+        return cleaned if cleaned else None
+
     return str(v)
 
 def run_full_sync():
