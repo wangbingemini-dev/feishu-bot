@@ -235,7 +235,7 @@ def process_message(message_id, user_text, chat_id):
 4. 输出 SQL 时，请直接输出 SQL 语句，可以用 [SQL] 包裹，也可以用普通 Markdown 的 ```sql 格式。
 5. 🔍 全局视野：如果用户询问某一天的大盘或各品类对比，务必使用 GROUP BY 品类，把该日期下所有存在的品类全部汇总出来。
 6. ⚠️ 致命物理限制：底层数据库每次查询【仅支持单条 SQL 语句】！绝对禁止使用分号 (;) 拼接多条 SELECT 语句一并输出。如果你既需要大盘汇总，又需要分品类明细，请必须使用 `GROUP BY 品类 WITH ROLLUP` 语法，或者用 `UNION ALL` 把它们合并成一条单一的 SQL 语句！
-    
+ """   
     ai_reply = call_ai_api(sys_instruction, history)
     
     sql_query = None
