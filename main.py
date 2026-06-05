@@ -13,7 +13,6 @@ app = FastAPI()
 # ================= 1. 核心钥匙与环境变量 =================
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET")
-# 🌟 硅基流动的 API KEY
 SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY")
 
 DB_HOST = os.environ.get("DB_HOST")
@@ -21,14 +20,12 @@ DB_USER = os.environ.get("DB_USER")
 DB_PASS = os.environ.get("DB_PASS")
 DB_NAME = os.environ.get("DB_NAME", "test")
 
-# 你的飞书知识库外壳 Token
 WIKI_TOKEN = "Re61wxHP9iO5NFk6IshckxNYnKc"
 
-# 全局记忆体（用于防重复轰炸和对话上下文）
 history_memory = {}
 processed_message_ids = set()
 
-# ================= 2. 飞书数据地图 (全中文原味对齐版) =================
+# ================= 2. 飞书数据地图 =================
 TABLE_CONFIGS = [
     {"table_id": "tblWWoVwjP9l1xIG", "db_table": "daily_category_gsv", "mapping": {"时间": "时间", "店铺": "店铺", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比", "目标": "目标", "目标达成率": "目标达成率"}},
     {"table_id": "tbl6yvd1FSN5atno", "db_table": "category_gsv_data", "mapping": {"时间": "时间", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比"}},
@@ -46,7 +43,51 @@ def get_tenant_access_token():
     res = requests.post(url, headers={"Content-Type": "application/json"}, json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}).json()
     return res.get("tenant_access_token")
 
-# ================= 4. 飞书主动拉取与清洗核心逻辑 =================
+# ================= 4. 自动建表与聊天记录保存模块 =================
+def init_chat_memory_db():
+    """启动时自动在 TiDB 创建一张记忆表（如果还没有的话）"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS chat_records (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                chat_id VARCHAR(100),
+                sender_id VARCHAR(100),
+                message_text TEXT,
+                create_time DATETIME
+            )
+            """)
+        conn.commit()
+        print("✅ 群聊记忆数据库 (chat_records) 已准备就绪！")
+    except Exception as e:
+        print(f"创建记忆表失败: {e}")
+    finally:
+        conn.close()
+
+@app.on_event("startup")
+def on_startup():
+    init_chat_memory_db()
+
+def save_chat_history(chat_id, sender_id, text):
+    """悄悄把群里的每一句话存进 TiDB 当做长期记忆"""
+    # 剔除掉飞书内部的 @ 标签代码（比如 @_user_1），保持聊天记录干净
+    clean_text = re.sub(r'@_user_\w+', '', text).strip()
+    if not clean_text: return
+    
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = "INSERT INTO chat_records (chat_id, sender_id, message_text, create_time) VALUES (%s, %s, %s, %s)"
+            now_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+            cursor.execute(sql, (chat_id, sender_id, clean_text, now_str))
+        conn.commit()
+    except Exception as e:
+        print(f"记忆保存失败: {e}")
+    finally:
+        conn.close()
+
+# ================= 5. 数据主动拉取模块 (省略部分长逻辑，保持原样) =================
 def get_real_app_token(wiki_token, token):
     url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token={wiki_token}"
     res = requests.get(url, headers={"Authorization": f"Bearer {token}"}).json()
@@ -116,19 +157,17 @@ def run_full_sync():
                     insert_data.append(tuple(row))
                 cursor.executemany(sql, insert_data)
             conn.commit()
-            print(f"✅ [{db_table}] 成功拉取并覆盖 {len(records)} 条新数据！")
+            print(f"✅ [{db_table}] 同步成功！")
         except Exception as e: 
             print(f"❌ [{db_table}] 写入失败: {e}")
     conn.close()
-    print("🎉 全量同步执行完毕！")
 
-# 🌟 双保险：兼容 GET 和 POST，配合 UptimeRobot 或飞书自动化
 @app.api_route("/force-sync", methods=["GET", "POST"])
 async def manual_sync(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_full_sync)
     return {"status": "success", "message": "全量拉取同步已在后台启动！"}
 
-# ================= 5. Xavier AI 大脑 (硅基流动 DeepSeek-V4-Pro 驱动版) =================
+# ================= 6. Xavier AI 大脑中枢 =================
 def get_database_schema():
     conn = get_db_connection()
     schema_info = ""
@@ -165,14 +204,12 @@ def reply_feishu_message(message_id, text):
     requests.post(url, headers={"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}, json=payload)
 
 def call_ai_api(sys_instruction, history):
-    """调用硅基流动平台提供的 DeepSeek 大模型"""
     url = "https://api.siliconflow.cn/v1/chat/completions"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {SILICONFLOW_API_KEY}"
     }
 
-    # 自动转换格式为 OpenAI / DeepSeek 标准格式
     messages = [{"role": "system", "content": sys_instruction}]
     for msg in history:
         role = "assistant" if msg["role"] == "model" else "user"
@@ -180,10 +217,9 @@ def call_ai_api(sys_instruction, history):
         messages.append({"role": role, "content": content})
 
     payload = {
-        # 🚀 一键切换至最强旗舰 V4-Pro 模型
         "model": "deepseek-ai/DeepSeek-V4-Pro", 
         "messages": messages,
-        "temperature": 0.1 # 保持冷静客观，严谨写代码，避免过度发散
+        "temperature": 0.1 
     }
 
     for _ in range(3):
@@ -192,12 +228,10 @@ def call_ai_api(sys_instruction, history):
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content']
             else:
-                print(f"⚠️ API 拒绝了请求！状态码: {response.status_code} | 详情: {response.text}")
                 time.sleep(2)
         except Exception as e: 
-            print(f"API 网络层波动: {e}")
-            
-    return "Xavier 的大脑正在高速运转，API 通道稍微有点拥堵，请半分钟后再问我一次！"
+            pass
+    return "Xavier 的大脑正在高速运转，API 通道稍微拥堵，请稍后再试！"
 
 def process_message(message_id, user_text, chat_id):
     if chat_id not in history_memory:
@@ -207,42 +241,30 @@ def process_message(message_id, user_text, chat_id):
     history.append({"role": "user", "parts": [{"text": user_text}]})
     
     db_schema = get_database_schema()
-    
-    # 🌟 强力抗幻觉、注时区、定规则的终极 Prompt
     today_date = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+    
     sys_instruction = f"""你的名字叫Xavier，是全渠道净水器/厨房电器的顶级电商数据参谋。
 你的大脑已直连公司 TiDB 数据库。
-【当前时间基准】⏰ 今天是北京时间：{today_date}。你在推断“今天”、“昨天”、“本月”时，必须严格以此日期为基准！
+【当前时间基准】⏰ 今天是北京时间：{today_date}。
 
 以下是目前数据库的表结构：
 {db_schema}
 
 【🔥 核心业务表关系字典】
-1. 【大盘业绩】：只要问“今天总销售额”、“各品类销售”、“达成率”，优先且唯一使用 `daily_category_gsv` 或 `category_gsv_data`。这两张表有标准的 `时间` 和 `GSV` 字段。
-2. 【特定系列（⚠️ 宽表陷阱警告）】：如果问“昆仑系列”或“小京龙”，必须查 `kunlun_sales` 或 `dragons1_sales`。
-   - 这两张表是【按月展开的横向宽表】，它们绝对没有叫 `时间` 或 `GSV` 的字段！
-   - 它们只有 `月份` 字段，每天的销量被拆分成了独立的列名，如 `1日`、`2日`...`31日`。列名必须用反引号保护（如 `\`1日\``）。
-   - 【跨月/单日查询法则】：如果你要查某月特定日期的销量，必须对具体的日字段求和，并筛选月份。例如查 6月5日：`SELECT SUM(\`5日\`) FROM kunlun_sales WHERE 月份 LIKE '%06%' OR 月份 LIKE '%6月%'`。
-   - 【跨月组合法则】：如果用户要查“5月30日至6月1日”这种跨月数据，你必须高度智能地写 CASE WHEN 分离提取：例如 `SELECT SUM(CASE WHEN 月份 LIKE '%5%' THEN \`30日\` + \`31日\` ELSE 0 END) + SUM(CASE WHEN 月份 LIKE '%6%' THEN \`1日\` ELSE 0 END) FROM kunlun_sales`。
-3. 【跨表组合】：查询多个系列总和时使用 UNION ALL；查询品类表现附带单品数据时使用 JOIN。
+1. 【大盘业绩】：只要问“今天总销售额”、“各品类销售”，优先查 `daily_category_gsv`。
+2. 【特定系列（⚠️宽表陷阱）】：问“昆仑系列”或“小京龙”，必须查 `kunlun_sales` 或 `dragons1_sales`。它们是按月展开的横向宽表，没有 `时间` 字段，只有 `月份`，每天销量拆成了 `1日`、`2日`等列名。跨月查询必须用 CASE WHEN 分离提取提取。
+3. 【🧠 聊天记忆提取】：如果有用户让你“总结今天群里聊了什么”、“刚才说了什么”，你必须去查 `chat_records` 表！这是一张存储了群聊记忆的表，`message_text` 字段是群聊内容，`create_time` 是时间。
 
-【🤖 你的工作流与抗幻觉铁律 —— 极其重要！】
-你的大脑目前以“两阶段”模式运行，系统会自动配合你，请严格遵守以下纪律：
+【🤖 工作流与抗幻觉铁律】
+第一阶段：当用户提出业务问题时，你只需要思考如何写 SQL。
+⚠️ 绝对禁止在这个阶段输出分析文字、排版框架或捏造的假数据示例！【只能】输出一段被 ```sql ``` 包裹的 MySQL 代码。
 
-第一阶段（仅限查数）：
-当用户提出业务问题时，你只需要思考如何写 SQL。
-⚠️ 绝对禁止：在这个阶段，你【只能】输出一段被 ```sql ``` 包裹的 MySQL 代码！【绝不允许】在输出代码的同时，输出任何分析文字、排版框架，或编造诸如“123456”之类的示例假数据表格！保持极度克制，写完 SQL 就立刻结束回答！
-
-第二阶段（汇报结果）：
-系统会在后台执行你的 SQL，并把真实的查询结果用文本形式喂给你。
-⚠️ 绝对禁止：如果你收到的真实结果是空的（如 () 或 []），请直接向用户如实汇报“数据库中暂无该维度的数据”，【严禁】为了迎合用户而擅自捏造数据填补空白！
+第二阶段：系统会在后台执行你的 SQL，并把真实查询结果喂给你。如果结果为空，直接告诉用户暂无数据，严禁瞎编。
 
 【⚙️ 物理限制】
-1. 底层数据库每次查询【仅支持单条 SQL 语句】！禁止使用分号(;)拼接多条 SELECT。
-2. 如果需要多维度数据（例如既看汇总，又看品类明细），请必须使用 GROUP BY ... WITH ROLLUP 语法，或者使用 UNION ALL 合并为一条极其严谨的单一 SQL 查询。
+每次查询【仅支持单条 SQL 语句】！如果是多维度数据，请用 GROUP BY ... WITH ROLLUP 或 UNION ALL 合并。
 """
     
-    # 第一回合：让模型写 SQL
     ai_reply = call_ai_api(sys_instruction, history)
     
     sql_query = None
@@ -258,20 +280,18 @@ def process_message(message_id, user_text, chat_id):
         db_data = execute_ai_sql(sql_query)
         
         history.append({"role": "model", "parts": [{"text": ai_reply}]})
-        
-        # 第二回合：把真实结果抛回给模型，强行“禁言”SQL
-        second_prompt = f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于上述数据，用专业的商业口吻直接向用户汇报分析结果。如果数据为空，请直接告诉用户“系统内暂无该日期的数据”。【警告】：绝对禁止在这次回复中再次输出任何 SQL 语句代码！"
+        second_prompt = f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于上述数据向用户汇报。数据为空就直说。绝不能再输出 SQL 代码！"
         history.append({"role": "user", "parts": [{"text": second_prompt}]})
         
         ai_reply = call_ai_api(sys_instruction, history)
 
-    if "通道稍微有点拥堵" not in ai_reply:
+    if "通道稍微拥堵" not in ai_reply:
         history_memory[chat_id].append({"role": "user", "parts": [{"text": user_text}]})
         history_memory[chat_id].append({"role": "model", "parts": [{"text": ai_reply}]})
         
     reply_feishu_message(message_id, ai_reply)
 
-# ================= 6. 飞书 Webhook 接收入口 (防连环轰炸版) =================
+# ================= 7. 飞书 Webhook 接收入口 (双线工作流) =================
 @app.post("/webhook")
 async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
@@ -284,18 +304,35 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     
     message_id = msg.get("message_id")
     chat_id = msg.get("chat_id")
+    chat_type = msg.get("chat_type", "p2p")  # 判断是单聊还是群聊
+    sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "unknown")
     
     if msg.get("message_type") == "text":
-        
-        # 🛡️ 拦截器：如果飞书因为超时重发，直接挡在门外
         if message_id in processed_message_ids:
-            print(f"🛡️ 拦截到飞书重复发送的消息，已忽略: {message_id}")
             return {"status": "ok"}
-            
         processed_message_ids.add(message_id)
         
         content = json.loads(msg.get("content", "{}"))
         user_text = content.get("text", "")
-        background_tasks.add_task(process_message, message_id, user_text, chat_id)
         
+        # 🌟 动作 1：潜水模式（海马体） —— 悄悄把这句话存进 TiDB 当做长期记忆
+        background_tasks.add_task(save_chat_history, chat_id, sender_id, user_text)
+        
+        # 🌟 动作 2：激活模式（大脑） —— 判断是否需要 AI 站出来回答
+        should_reply = False
+        
+        if chat_type == "p2p":
+            # 如果是私聊，有问必答
+            should_reply = True
+        elif chat_type == "group":
+            # 如果是群聊，必须检查是否有人 "@" 了机器人
+            mentions = msg.get("mentions", [])
+            if len(mentions) > 0:
+                should_reply = True
+                
+        if should_reply:
+            # 去除文本里的 @ 标签（如 @_user_1），防止干扰大模型理解
+            clean_text = re.sub(r'@_user_\w+', '', user_text).strip()
+            background_tasks.add_task(process_message, message_id, clean_text, chat_id)
+            
     return {"status": "ok"}
