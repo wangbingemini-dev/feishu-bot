@@ -13,7 +13,8 @@ app = FastAPI()
 # ================= 1. 核心钥匙与环境变量 =================
 FEISHU_APP_ID = os.environ.get("FEISHU_APP_ID")
 FEISHU_APP_SECRET = os.environ.get("FEISHU_APP_SECRET")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# 🌟 改为读取硅基流动的 API KEY
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY")
 
 DB_HOST = os.environ.get("DB_HOST")
 DB_USER = os.environ.get("DB_USER")
@@ -31,7 +32,7 @@ processed_message_ids = set()
 TABLE_CONFIGS = [
     {"table_id": "tblWWoVwjP9l1xIG", "db_table": "daily_category_gsv", "mapping": {"时间": "时间", "店铺": "店铺", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比", "目标": "目标", "目标达成率": "目标达成率"}},
     {"table_id": "tbl6yvd1FSN5atno", "db_table": "category_gsv_data", "mapping": {"时间": "时间", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比"}},
-    {"table_id": "tbllTcE3CS2FdN5b", "db_table": "month_gsv_data", "mapping": {"月份": "月份", "店铺": "店铺", "品类": "品类", "目标": "目标", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
+     {"table_id": "tbllTcE3CS2FdN5b", "db_table": "month_gsv_data", "mapping": {"月份": "月份", "店铺": "店铺", "品类": "品类", "目标": "目标", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
     {"table_id": "tbl2MaSswe4Osoou", "db_table": "kunlun_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
     {"table_id": "tbl4ehsa3xc0z5nq", "db_table": "dragons1_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
 ]
@@ -53,48 +54,35 @@ def get_real_app_token(wiki_token, token):
     return wiki_token
 
 def clean_feishu_value(v):
-    """暴力清洗飞书嵌套格式，强行炼化数字，并修正北京时区"""
     if v is None or v == "": return None
-    
-    # 破除飞书俄罗斯套娃格式
     if isinstance(v, list) and len(v) > 0:
-        if isinstance(v[0], dict):
-            v = v[0].get("value", v[0].get("text", v[0]))
-        else:
-            v = v[0]
-    if isinstance(v, dict):
-        v = v.get("value", v.get("text", v))
+        if isinstance(v[0], dict): v = v[0].get("value", v[0].get("text", v[0]))
+        else: v = v[0]
+    if isinstance(v, dict): v = v.get("value", v.get("text", v))
 
-    # 处理标准数字与修正北京时区
     if isinstance(v, (int, float)):
         if v > 1000000000000:
             dt = datetime.fromtimestamp(v / 1000.0, timezone.utc) + timedelta(hours=8)
             return dt.strftime('%Y-%m-%d')
         return float(v)
 
-    # 字符串剔除杂质与强行数字炼化
     if isinstance(v, str): 
         cleaned = v.replace(',', '').replace('¥', '').replace('￥', '').replace('\xa0', '').strip()
         if not cleaned: return None
-        try:
-            return float(cleaned)
-        except ValueError:
-            return cleaned 
-            
+        try: return float(cleaned)
+        except ValueError: return cleaned 
     return str(v)
 
 def run_full_sync():
     print("🚀 [后台任务] 开始执行全量数据主动拉取...")
     tenant_token = get_tenant_access_token()
     if not tenant_token: return
-    
     app_token = get_real_app_token(WIKI_TOKEN, tenant_token)
     conn = get_db_connection()
     
     for config in TABLE_CONFIGS:
         table_id = config["table_id"]
         if "REPLACE" in table_id: continue
-        
         db_table = config["db_table"]
         mapping = config["mapping"]
         records = []
@@ -109,7 +97,6 @@ def run_full_sync():
             
             items = res.get("data", {}).get("items", [])
             for item in items: records.append(item.get("fields", {}))
-            
             has_more = res.get("data", {}).get("has_more", False)
             page_token = res.get("data", {}).get("page_token", "")
             
@@ -117,9 +104,7 @@ def run_full_sync():
         
         try:
             with conn.cursor() as cursor:
-                cursor.execute(f"TRUNCATE TABLE {db_table}") # 清空旧表
-                
-                # 因为列名可能以数字开头，必须用反引号包裹保护
+                cursor.execute(f"TRUNCATE TABLE {db_table}")
                 cols = [f"`{col}`" for col in mapping.values()]
                 cols_str = ", ".join(cols)
                 placeholders = ", ".join(["%s"] * len(cols))
@@ -129,28 +114,21 @@ def run_full_sync():
                 for rec in records:
                     row = [clean_feishu_value(rec.get(feishu_col)) for feishu_col in mapping.keys()]
                     insert_data.append(tuple(row))
-                
                 cursor.executemany(sql, insert_data)
             conn.commit()
             print(f"✅ [{db_table}] 成功拉取并覆盖 {len(records)} 条新数据！")
         except Exception as e: 
             print(f"❌ [{db_table}] 写入失败: {e}")
-        
     conn.close()
     print("🎉 全量同步执行完毕！")
 
-@app.on_event("startup")
-def start_scheduler():
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(run_full_sync, 'interval', hours=2)
-    scheduler.start()
-
+# 🌟 双保险：兼容 GET 和 POST，配合 UptimeRobot 无敌
 @app.api_route("/force-sync", methods=["GET", "POST"])
 async def manual_sync(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_full_sync)
     return {"status": "success", "message": "全量拉取同步已在后台启动！"}
 
-# ================= 5. Xavier AI 大脑查询与生成中枢 =================
+# ================= 5. Xavier AI 大脑 (硅基流动 DeepSeek 驱动版) =================
 def get_database_schema():
     conn = get_db_connection()
     schema_info = ""
@@ -180,26 +158,47 @@ def execute_ai_sql(sql_query):
     finally:
         conn.close()
 
-def call_gemini_api(payload):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-    for _ in range(3):
-        try:
-            response = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=45)
-            if response.status_code == 200:
-                return response.json()['candidates'][0]['content']['parts'][0]['text']
-            else:
-                print(f"⚠️ Google 拒绝了请求！状态码: {response.status_code} | 报错详情: {response.text}")
-                time.sleep(2)
-        except Exception as e: 
-            print(f"API 网络层波动: {e}")
-            
-    return "Xavier 的大脑正在高速运转，API 通道稍微有点拥堵，请半分钟后再问我一次！"
-
 def reply_feishu_message(message_id, text):
     tenant_token = get_tenant_access_token()
     url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
     payload = {"msg_type": "text", "content": json.dumps({"text": text})}
     requests.post(url, headers={"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}, json=payload)
+
+def call_ai_api(sys_instruction, history):
+    """调用硅基流动平台提供的 DeepSeek 大模型"""
+    # 🌟 硅基流动的 API 地址
+    url = "https://api.siliconflow.cn/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {SILICONFLOW_API_KEY}"
+    }
+
+    # 自动转换格式为 OpenAI / DeepSeek 标准格式
+    messages = [{"role": "system", "content": sys_instruction}]
+    for msg in history:
+        role = "assistant" if msg["role"] == "model" else "user"
+        content = msg["parts"][0]["text"]
+        messages.append({"role": role, "content": content})
+
+    payload = {
+        # 🌟 硅基流动平台上的 DeepSeek V3 官方调用名称
+        "model": "deepseek-ai/DeepSeek-V4-Pro", 
+        "messages": messages,
+        "temperature": 0.1 # 保持冷静客观，严谨写代码
+    }
+
+    for _ in range(3):
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            if response.status_code == 200:
+                return response.json()['choices'][0]['message']['content']
+            else:
+                print(f"⚠️ API 拒绝了请求！状态码: {response.status_code} | 详情: {response.text}")
+                time.sleep(2)
+        except Exception as e: 
+            print(f"API 网络层波动: {e}")
+            
+    return "Xavier 的大脑正在高速运转，API 通道稍微有点拥堵，请半分钟后再问我一次！"
 
 def process_message(message_id, user_text, chat_id):
     if chat_id not in history_memory:
@@ -223,33 +222,30 @@ def process_message(message_id, user_text, chat_id):
 6. 系统执行后会把真实结果喂给你。拿到结果后，请用极具商业洞察的视角、分点、加粗的 Markdown 格式输出你的最终分析。
 """
     
-    payload = {"system_instruction": {"parts": [{"text": sys_instruction}]}, "contents": history}
-    
-    gemini_reply = call_gemini_api(payload)
+    ai_reply = call_ai_api(sys_instruction, history)
     
     sql_query = None
-    if "[SQL]" in gemini_reply and "[/SQL]" in gemini_reply:
-        match = re.search(r'\[SQL\](.*?)\[/SQL\]', gemini_reply, re.DOTALL)
+    if "[SQL]" in ai_reply and "[/SQL]" in ai_reply:
+        match = re.search(r'\[SQL\](.*?)\[/SQL\]', ai_reply, re.DOTALL)
         if match: sql_query = match.group(1).strip()
-    elif "```sql" in gemini_reply.lower() and "```" in gemini_reply:
-        match = re.search(r'```sql(.*?)```', gemini_reply, re.DOTALL | re.IGNORECASE)
+    elif "```sql" in ai_reply.lower() and "```" in ai_reply:
+        match = re.search(r'```sql(.*?)```', ai_reply, re.DOTALL | re.IGNORECASE)
         if match: sql_query = match.group(1).strip()
 
     if sql_query:
         print(f"🤖 AI 生成了查询指令: {sql_query}")
         db_data = execute_ai_sql(sql_query)
         
-        history.append({"role": "model", "parts": [{"text": gemini_reply}]})
+        history.append({"role": "model", "parts": [{"text": ai_reply}]})
         history.append({"role": "user", "parts": [{"text": f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于这些真实数据，直接回答我最初的业务问题，绝对禁止瞎编数字。"}]})
         
-        payload["contents"] = history
-        gemini_reply = call_gemini_api(payload)
+        ai_reply = call_ai_api(sys_instruction, history)
 
-    if "通道稍微有点拥堵" not in gemini_reply:
+    if "通道稍微有点拥堵" not in ai_reply:
         history_memory[chat_id].append({"role": "user", "parts": [{"text": user_text}]})
-        history_memory[chat_id].append({"role": "model", "parts": [{"text": gemini_reply}]})
+        history_memory[chat_id].append({"role": "model", "parts": [{"text": ai_reply}]})
         
-    reply_feishu_message(message_id, gemini_reply)
+    reply_feishu_message(message_id, ai_reply)
 
 # ================= 6. 飞书 Webhook 接收入口 (防连环轰炸版) =================
 @app.post("/webhook")
