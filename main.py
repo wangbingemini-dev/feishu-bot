@@ -229,11 +229,12 @@ def process_message(message_id, user_text, chat_id):
    - 如果用户问“某个品类的整体表现，且要求带上核心单品的 ROI”，你需要使用 JOIN 语句，通过时间或店铺字段，将 `daily_category_gsv` 与 `core_item_data` 联合查询。
 
 【查数指令规范 —— 极其重要！】
-1. 务必自己写 MySQL 语句查询真实数据，禁止瞎编。遇到复杂的跨业务问题，大胆使用 JOIN 或 UNION。
+1. 回答任何涉及数据的业务问题，务必自己写 MySQL 语句去查询真实数据。禁止瞎编。遇到复杂的跨业务问题，大胆使用 JOIN 或 UNION。
 2. 📅 时间查询规则：严格使用带横杠的 `YYYY-MM-DD` 格式进行 WHERE 筛选。
 3. 💰 数值计算规则：表中的金额已经是纯数字格式（DOUBLE），直接使用 SUM() 等函数计算即可。
 4. 输出 SQL 时，请直接输出 SQL 语句，可以用 [SQL] 包裹，也可以用普通 Markdown 的 ```sql 格式。
-"""
+5. 🔍 全局视野：如果用户询问某一天的大盘或各品类对比，务必使用 GROUP BY 品类，把该日期下所有存在的品类全部汇总出来。
+6. ⚠️ 致命物理限制：底层数据库每次查询【仅支持单条 SQL 语句】！绝对禁止使用分号 (;) 拼接多条 SELECT 语句一并输出。如果你既需要大盘汇总，又需要分品类明细，请必须使用 `GROUP BY 品类 WITH ROLLUP` 语法，或者用 `UNION ALL` 把它们合并成一条单一的 SQL 语句！
     
     ai_reply = call_ai_api(sys_instruction, history)
     
