@@ -218,9 +218,13 @@ def process_message(message_id, user_text, chat_id):
 {db_schema}
 
 【🔥 核心业务表关系字典】
-1. 【大盘业绩】：只要问“今天总销售额”、“各品类销售”、“达成率”，优先且唯一使用 `daily_category_gsv` 或 `category_gsv_data`。
-2. 【特定系列】：如果问“昆仑系列”或“小京龙”，去查 `kunlun_sales` 或 `dragons1_sales`。
-3. 【跨表组合】：查询多个系列总和时大胆使用 UNION ALL；查询品类表现附带单品数据时使用 JOIN。
+1. 【大盘业绩】：只要问“今天总销售额”、“各品类销售”、“达成率”，优先且唯一使用 `daily_category_gsv` 或 `category_gsv_data`。这两张表有标准的 `时间` 和 `GSV` 字段。
+2. 【特定系列（⚠️ 宽表陷阱警告）】：如果问“昆仑系列”或“小京龙”，必须查 `kunlun_sales` 或 `dragons1_sales`。
+   - 这两张表是【按月展开的横向宽表】，它们绝对没有叫 `时间` 或 `GSV` 的字段！
+   - 它们只有 `月份` 字段，每天的销量被拆分成了独立的列名，如 `1日`、`2日`...`31日`。列名必须用反引号保护（如 `\`1日\``）。
+   - 【跨月/单日查询法则】：如果你要查某月特定日期的销量，必须对具体的日字段求和，并筛选月份。例如查 6月5日：`SELECT SUM(\`5日\`) FROM kunlun_sales WHERE 月份 LIKE '%06%' OR 月份 LIKE '%6月%'`。
+   - 【跨月组合法则】：如果用户要查“5月30日至6月1日”这种跨月数据，你必须高度智能地写 CASE WHEN 分离提取：例如 `SELECT SUM(CASE WHEN 月份 LIKE '%5%' THEN \`30日\` + \`31日\` ELSE 0 END) + SUM(CASE WHEN 月份 LIKE '%6%' THEN \`1日\` ELSE 0 END) FROM kunlun_sales`。
+3. 【跨表组合】：查询多个系列总和时使用 UNION ALL；查询品类表现附带单品数据时使用 JOIN。
 
 【🤖 你的工作流与抗幻觉铁律 —— 极其重要！】
 你的大脑目前以“两阶段”模式运行，系统会自动配合你，请严格遵守以下纪律：
