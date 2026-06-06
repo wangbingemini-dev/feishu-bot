@@ -258,16 +258,30 @@ def process_message(message_id, user_text, chat_id):
     if chat_id not in history_memory:
         history_memory[chat_id] = []
     
-    # 🌟 嗅探飞书文档链接并自动阅读
-    docx_match = re.search(r'https://[a-zA-Z0-9-]+\.feishu\.cn/docx/([a-zA-Z0-9]+)', user_text)
-    if docx_match:
-        doc_id = docx_match.group(1)
-        print(f"📖 嗅探到飞书文档，正在自动抓取内容，文档ID: {doc_id}")
-        doc_content = read_feishu_docx(doc_id)
-        if "抱歉，我无法读取" not in doc_content:
-            user_text += f"\n\n【系统附加知识】用户发送了飞书文档，我已替你提取内容如下，请作为重要背景知识：\n---\n{doc_content}\n---"
+    # 🌟 升级版嗅探器：同时捕获 docx 和 wiki 链接
+    link_match = re.search(r'https://[a-zA-Z0-9-]+\.feishu\.cn/(docx|wiki)/([a-zA-Z0-9]+)', user_text)
+    
+    if link_match:
+        link_type = link_match.group(1) # 识别是 'docx' 还是 'wiki'
+        doc_id_or_token = link_match.group(2)
+        
+        print(f"📖 嗅探到飞书文档，类型: {link_type}, 标识符: {doc_id_or_token}")
+        
+        # 如果是 Wiki 链接，必须先向飞书底层请求真实的文档 ID
+        if link_type == 'wiki':
+            tenant_token = get_tenant_access_token()
+            doc_id = get_real_app_token(doc_id_or_token, tenant_token)
+            print(f"🔄 Wiki 链接已破译为真实文档 ID: {doc_id}")
         else:
-            user_text += f"\n\n【系统附加知识】读取文档失败，请提醒用户去文档右上角赋予你阅读权限。"
+            doc_id = doc_id_or_token
+            
+        doc_content = read_feishu_docx(doc_id)
+        
+        if "抱歉，我无法读取" not in doc_content:
+            # 极度强硬的防幻觉提示词，逼迫 AI 只看文档
+            user_text += f"\n\n【系统最高指令】用户发了一篇飞书文档，我已提取全文如下。你接下来的回答，【必须100%基于以下文档内容】，严禁编造和发散！\n---\n{doc_content}\n---"
+        else:
+            user_text += f"\n\n【系统提示】读取文档失败。请如实告诉用户：“我无法读取该文档，请确认链接格式是否正确，并去文档右上角将机器人添加为‘可阅读’权限。”"
 
     history = history_memory[chat_id][-10:]
     history.append({"role": "user", "parts": [{"text": user_text}]})
