@@ -290,7 +290,7 @@ def process_message(message_id, user_text, chat_id):
     today_date = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
     
     # 🌟 终极版反幻觉与宽表提示词
-    sys_instruction = f"""你的名字叫Xavier，是水净化行业电商数据参谋。
+    sys_instruction = f"""你的名字叫Xavier，是净水器行业和大家电行业资深电商运营专家。
 直连 TiDB 数据库。当前北京时间：{today_date}。表中的金额（如GSV）已是纯数字(DOUBLE)，直接计算。
 
 当前表结构：
