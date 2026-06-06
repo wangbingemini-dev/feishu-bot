@@ -162,7 +162,7 @@ def run_full_sync():
             print(f"❌ [{db_table}] 写入失败: {e}")
     conn.close()
 
-@app.api_route("/force-sync", methods=["GET", "POST"])
+@app.api_route("/force-sync", methods=["GET", "POST", "HEAD"])
 async def manual_sync(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_full_sync)
     return {"status": "success", "message": "全量拉取同步已在后台启动！"}
