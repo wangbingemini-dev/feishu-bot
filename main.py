@@ -28,7 +28,7 @@ processed_message_ids = set()
 TABLE_CONFIGS = [
     {"table_id": "tblWWoVwjP9l1xIG", "db_table": "daily_category_gsv", "mapping": {"时间": "时间", "店铺": "店铺", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比", "目标": "目标", "目标达成率": "目标达成率"}},
     {"table_id": "tbl6yvd1FSN5atno", "db_table": "category_gsv_data", "mapping": {"时间": "时间", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比"}},
-    {"table_id": "tbllTcE3CS2FdN5b", "db_table": "month_gsv_data", "mapping": {"月份": "月份", "店铺": "店铺", "品类": "品类", "目标": "目标", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
+     {"table_id": "tbllTcE3CS2FdN5b", "db_table": "month_gsv_data", "mapping": {"月份": "月份", "店铺": "店铺", "品类": "品类", "目标": "目标", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
     {"table_id": "tbl2MaSswe4Osoou", "db_table": "kunlun_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
     {"table_id": "tbl4ehsa3xc0z5nq", "db_table": "dragons1_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
 ]
@@ -42,12 +42,13 @@ def get_tenant_access_token():
     res = requests.post(url, headers={"Content-Type": "application/json"}, json={"app_id": FEISHU_APP_ID, "app_secret": FEISHU_APP_SECRET}).json()
     return res.get("tenant_access_token")
 
-# ================= 4. 记忆系统与知识解析 =================
-def init_chat_memory_db():
-    """初始化群聊记忆数据库"""
+# ================= 4. 记忆系统与向量长文档解析 (RAG架构) =================
+def init_databases():
+    """初始化群聊记忆数据库和长文档向量知识库"""
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
+            # 群聊记忆表
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_records (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -57,19 +58,29 @@ def init_chat_memory_db():
                 create_time DATETIME
             )
             """)
+            # 向量检索知识库表
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS document_vectors (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                doc_id VARCHAR(100) COMMENT '飞书文档ID',
+                chunk_text TEXT COMMENT '文档段落文本',
+                embedding VECTOR(1024) COMMENT '语义向量',
+                create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """)
         conn.commit()
-        print("✅ 群聊记忆数据库 (chat_records) 已准备就绪！")
+        print("✅ 记忆系统 (chat_records) 与 向量知识库 (document_vectors) 已就绪！")
     except Exception as e:
-        print(f"创建记忆表失败: {e}")
+        print(f"创建记忆/向量表失败: {e}")
     finally:
         conn.close()
 
 @app.on_event("startup")
 def on_startup():
-    init_chat_memory_db()
+    init_databases()
 
 def save_chat_history(chat_id, sender_id, text):
-    """保存群聊记录"""
+    """保存所有群聊记录（不论是否@）"""
     clean_text = re.sub(r'@_user_\w+', '', text).strip()
     if not clean_text: return
     conn = get_db_connection()
@@ -85,7 +96,7 @@ def save_chat_history(chat_id, sender_id, text):
         conn.close()
 
 def read_feishu_docx(doc_id):
-    """专门读取飞书新版 Docx 文档的提取器"""
+    """读取飞书文档全文"""
     tenant_token = get_tenant_access_token()
     url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{doc_id}/blocks"
     headers = {"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}
@@ -97,7 +108,6 @@ def read_feishu_docx(doc_id):
             req_url = url + f"?page_token={page_token}" if page_token else url
             response = requests.get(req_url, headers=headers).json()
             if response.get("code") != 0:
-                print(f"❌ 读取文档失败: {response}")
                 return "抱歉，我无法读取这篇文档，请确认文档是否已向我开放阅读权限。"
             items = response.get("data", {}).get("items", [])
             for block in items:
@@ -112,7 +122,61 @@ def read_feishu_docx(doc_id):
     except Exception as e:
         return f"读取文档时发生物理异常: {e}"
 
-# ================= 5. 数据自动同步模块 =================
+def get_text_embedding(text):
+    """文本转 1024 维向量"""
+    url = "https://api.siliconflow.cn/v1/embeddings"
+    headers = {"Authorization": f"Bearer {SILICONFLOW_API_KEY}", "Content-Type": "application/json"}
+    payload = {"model": "BAAI/bge-m3", "input": text}
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=30).json()
+        return res['data'][0]['embedding']
+    except Exception as e:
+        print(f"向量化失败: {e}")
+        return None
+
+def process_and_store_long_doc(doc_id, full_text):
+    """长文档切块并入库 TiDB Vector"""
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) as cnt FROM document_vectors WHERE doc_id = %s", (doc_id,))
+            if cursor.fetchone()['cnt'] > 0: return True 
+            
+            chunk_size, overlap = 500, 50
+            chunks = [full_text[i:i + chunk_size] for i in range(0, len(full_text), chunk_size - overlap) if len(full_text[i:i + chunk_size]) > 50]
+            
+            for chunk in chunks:
+                vec = get_text_embedding(chunk)
+                if vec:
+                    vec_str = "[" + ",".join(map(str, vec)) + "]"
+                    cursor.execute("INSERT INTO document_vectors (doc_id, chunk_text, embedding) VALUES (%s, %s, %s)", (doc_id, chunk, vec_str))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"长文档存储失败: {e}")
+        return False
+    finally:
+        conn.close()
+
+def search_relevant_doc_chunks(user_question, limit=5):
+    """基于问题从 TiDB 中向量检索最相关的历史段落"""
+    question_vec = get_text_embedding(user_question)
+    if not question_vec: return ""
+    vec_str = "[" + ",".join(map(str, question_vec)) + "]"
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = f"""SELECT chunk_text, VEC_COSINE_DISTANCE(embedding, '{vec_str}') as distance 
+                      FROM document_vectors ORDER BY distance ASC LIMIT {limit}"""
+            cursor.execute(sql)
+            results = cursor.fetchall()
+            return "\n...\n".join([row['chunk_text'] for row in results])
+    except Exception as e:
+        return ""
+    finally:
+        conn.close()
+
+# ================= 5. 数据主动同步模块 =================
 def get_real_app_token(wiki_token, token):
     url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token={wiki_token}"
     res = requests.get(url, headers={"Authorization": f"Bearer {token}"}).json()
@@ -149,9 +213,7 @@ def run_full_sync():
         if "REPLACE" in table_id: continue
         db_table = config["db_table"]
         mapping = config["mapping"]
-        records = []
-        has_more = True
-        page_token = ""
+        records, has_more, page_token = [], True, ""
         
         while has_more:
             url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records?page_size=500"
@@ -182,7 +244,6 @@ def run_full_sync():
             print(f"❌ [{db_table}] 写入失败: {e}")
     conn.close()
 
-# 🌟 加入 HEAD 方法，完美兼容 UptimeRobot 免费版
 @app.api_route("/force-sync", methods=["GET", "POST", "HEAD"])
 async def manual_sync(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_full_sync)
@@ -226,18 +287,13 @@ def reply_feishu_message(message_id, text):
 
 def call_ai_api(sys_instruction, history):
     url = "https://api.siliconflow.cn/v1/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {SILICONFLOW_API_KEY}"
-    }
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {SILICONFLOW_API_KEY}"}
     messages = [{"role": "system", "content": sys_instruction}]
     for msg in history:
         role = "assistant" if msg["role"] == "model" else "user"
-        content = msg["parts"][0]["text"]
-        messages.append({"role": role, "content": content})
+        messages.append({"role": role, "content": msg["parts"][0]["text"]})
 
     payload = {
-        # 推荐使用 V3 以保证最高稳定性。若需最强逻辑且不怕拥堵，可改为 deepseek-ai/DeepSeek-V4-Pro
         "model": "deepseek-ai/DeepSeek-V3", 
         "messages": messages,
         "temperature": 0.1 
@@ -246,42 +302,36 @@ def call_ai_api(sys_instruction, history):
     for _ in range(3):
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=60)
-            if response.status_code == 200:
-                return response.json()['choices'][0]['message']['content']
-            else:
-                time.sleep(2)
-        except Exception as e: 
-            pass
+            if response.status_code == 200: return response.json()['choices'][0]['message']['content']
+            time.sleep(2)
+        except Exception as e: pass
     return "Xavier 的大脑正在高速运转，API 通道稍微拥堵，请尝试拆分您的提问！"
 
 def process_message(message_id, user_text, chat_id):
     if chat_id not in history_memory:
         history_memory[chat_id] = []
     
-    # 🌟 升级版嗅探器：同时捕获 docx 和 wiki 链接
+    # 🌟 1. 嗅探链接并切片入库（包含 Docx 和 Wiki 兼容）
     link_match = re.search(r'https://[a-zA-Z0-9-]+\.feishu\.cn/(docx|wiki)/([a-zA-Z0-9]+)', user_text)
-    
     if link_match:
-        link_type = link_match.group(1) # 识别是 'docx' 还是 'wiki'
+        link_type = link_match.group(1)
         doc_id_or_token = link_match.group(2)
+        doc_id = get_real_app_token(doc_id_or_token, get_tenant_access_token()) if link_type == 'wiki' else doc_id_or_token
         
-        print(f"📖 嗅探到飞书文档，类型: {link_type}, 标识符: {doc_id_or_token}")
-        
-        # 如果是 Wiki 链接，必须先向飞书底层请求真实的文档 ID
-        if link_type == 'wiki':
-            tenant_token = get_tenant_access_token()
-            doc_id = get_real_app_token(doc_id_or_token, tenant_token)
-            print(f"🔄 Wiki 链接已破译为真实文档 ID: {doc_id}")
+        full_text = read_feishu_docx(doc_id)
+        if "抱歉，我无法读取" not in full_text:
+            success = process_and_store_long_doc(doc_id, full_text)
+            if success:
+                user_text += f"\n\n【系统提示】文档已成功拆解并存入知识库。请直接告诉用户：'我已经把这篇文档学习完毕存入记忆库了，你可以向我提问关于文档的任何细节。'"
         else:
-            doc_id = doc_id_or_token
-            
-        doc_content = read_feishu_docx(doc_id)
-        
-        if "抱歉，我无法读取" not in doc_content:
-            # 极度强硬的防幻觉提示词，逼迫 AI 只看文档
-            user_text += f"\n\n【系统最高指令】用户发了一篇飞书文档，我已提取全文如下。你接下来的回答，【必须100%基于以下文档内容】，严禁编造和发散！\n---\n{doc_content}\n---"
-        else:
-            user_text += f"\n\n【系统提示】读取文档失败。请如实告诉用户：“我无法读取该文档，请确认链接格式是否正确，并去文档右上角将机器人添加为‘可阅读’权限。”"
+            user_text += f"\n\n【系统提示】读取失败，提醒用户开通权限。"
+
+    # 🌟 2. 向量大海捞针检索
+    clean_query = re.sub(r'https://[a-zA-Z0-9-]+\.feishu\.cn/\S+', '', user_text).strip()
+    if clean_query: 
+        relevant_context = search_relevant_doc_chunks(clean_query, limit=5)
+        if relevant_context:
+            user_text += f"\n\n【专属知识检索提取】为了回答用户的这个问题，系统检索到了以下极其相关的文档历史片段，请务必严格参考它们作答：\n---\n{relevant_context}\n---"
 
     history = history_memory[chat_id][-10:]
     history.append({"role": "user", "parts": [{"text": user_text}]})
@@ -289,15 +339,14 @@ def process_message(message_id, user_text, chat_id):
     db_schema = get_database_schema()
     today_date = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
     
-    # 🌟 终极版反幻觉与宽表提示词
-    sys_instruction = f"""你的名字叫Xavier，是净水器行业和大家电行业资深电商运营专家。
-直连 TiDB 数据库。当前北京时间：{today_date}。表中的金额（如GSV）已是纯数字(DOUBLE)，直接计算。
+    sys_instruction = f"""你的名字叫Xavier，是家电行业资深电商运营专家，擅长电商数据分析。
+直连 TiDB。当前北京时间：{today_date}。表中的金额（GSV等）已是纯数字(DOUBLE)。
 
 当前表结构：
 {db_schema}
 
 【🔥 业务字典与防错铁律】
-1. 【大盘】：问总额、各品类销售，优先查 `daily_category_gsv` 或 `category_gsv_data`。
+1. 【大盘】：问总额、各品类销售，优先查 `daily_category_gsv`。
 2. 【特定系列（⚠️宽表防空值跨月法则）】：
    - 昆仑或小京龙必须查 `kunlun_sales` 或 `dragons1_sales`。
    - 它们是宽表，`月份` 严格为 `YYYY年MM月`（如 '2026年06月'）。每天对应 `1日`...`31日` 列（必须用反引号保护，如 `1日`）。
@@ -309,7 +358,7 @@ def process_message(message_id, user_text, chat_id):
 阶段一：仅思考并输出一段被 ```sql ``` 包裹的代码！绝对禁止输出假数据示例或文字。
 阶段二：收到真实数据后汇报。若结果为空/NULL/None，如实回答数据未录入，严禁瞎编。
 
-【⚙️ 物理限制】每次仅支持单条 SQL！多维度合并请用 UNION ALL。遇到极其复杂跨表需求，请提示用户拆分提问。
+【⚙️ 物理限制】每次仅支持单条 SQL！多维度合并请用 UNION ALL。
 """
     
     ai_reply = call_ai_api(sys_instruction, history)
@@ -327,7 +376,7 @@ def process_message(message_id, user_text, chat_id):
         db_data = execute_ai_sql(sql_query)
         
         history.append({"role": "model", "parts": [{"text": ai_reply}]})
-        second_prompt = f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于上述数据向用户汇报。数据为空或为0就直说。绝不能再输出 SQL 代码！"
+        second_prompt = f"系统已执行你的SQL，数据库返回的真实数据如下:\n{db_data}\n\n请严格基于上述数据向用户汇报。绝不能再输出 SQL 代码！"
         history.append({"role": "user", "parts": [{"text": second_prompt}]})
         
         ai_reply = call_ai_api(sys_instruction, history)
@@ -338,7 +387,7 @@ def process_message(message_id, user_text, chat_id):
         
     reply_feishu_message(message_id, ai_reply)
 
-# ================= 7. 飞书 Webhook 接收入口 =================
+# ================= 7. 飞书 Webhook 接收入口 (精准防干扰版) =================
 @app.post("/webhook")
 async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
@@ -359,13 +408,27 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
         content = json.loads(msg.get("content", "{}"))
         user_text = content.get("text", "")
         
+        # 🌟 第一层动作：潜水模式（不管谁说话，统统存入记忆库）
         background_tasks.add_task(save_chat_history, chat_id, sender_id, user_text)
         
+        # 🌟 第二层动作：身份甄别（判断是否需要大脑开口回复）
         should_reply = False
-        if chat_type == "p2p": should_reply = True
-        elif chat_type == "group" and len(msg.get("mentions", [])) > 0: should_reply = True
+        
+        if chat_type == "p2p":
+            # 规则 1：私聊场景，有问必答
+            should_reply = True
+        elif chat_type == "group":
+            # 规则 2：群聊场景，极其严格的 @ 拦截机制
+            mentions = msg.get("mentions", [])
+            for m in mentions:
+                # 检查 mentions 数组里，是否包含了机器人的身份标志 (bot_id) 或名称
+                if "bot_id" in m.get("id", {}) or m.get("name", "").lower() in ["xavier", "机器人"]:
+                    should_reply = True
+                    break
                 
+        # 只有通过了身份甄别，才会调用大模型进行运算回复
         if should_reply:
+            # 清理文本中的飞书 @ 标签乱码
             clean_text = re.sub(r'@_user_\w+', '', user_text).strip()
             background_tasks.add_task(process_message, message_id, clean_text, chat_id)
             
