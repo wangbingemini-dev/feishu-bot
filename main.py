@@ -6,6 +6,7 @@ import pymysql
 import re
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, Request, BackgroundTasks
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = FastAPI()
 
@@ -28,7 +29,7 @@ processed_message_ids = set()
 TABLE_CONFIGS = [
     {"table_id": "tblWWoVwjP9l1xIG", "db_table": "daily_category_gsv", "mapping": {"时间": "时间", "店铺": "店铺", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比", "目标": "目标", "目标达成率": "目标达成率"}},
     {"table_id": "tbl6yvd1FSN5atno", "db_table": "category_gsv_data", "mapping": {"时间": "时间", "品类": "品类", "GSV": "GSV", "同期GSV": "同期GSV", "同比": "同比"}},
-     {"table_id": "tbllTcE3CS2FdN5b", "db_table": "month_gsv_data", "mapping": {"月份": "月份", "店铺": "店铺", "品类": "品类", "目标": "目标", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
+    {"table_id": "tbllTcE3CS2FdN5b", "db_table": "month_gsv_data", "mapping": {"月份": "月份", "店铺": "店铺", "品类": "品类", "目标": "目标", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
     {"table_id": "tbl2MaSswe4Osoou", "db_table": "kunlun_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
     {"table_id": "tbl4ehsa3xc0z5nq", "db_table": "dragons1_sales", "mapping": {"月份": "月份", "店铺": "店铺", "商品id": "商品id", "产品名称": "产品名称", "目标": "目标", "达成率": "达成率", "合计": "合计", "1日": "1日", "2日": "2日", "3日": "3日", "4日": "4日", "5日": "5日", "6日": "6日", "7日": "7日", "8日": "8日", "9日": "9日", "10日": "10日", "11日": "11日", "12日": "12日", "13日": "13日", "14日": "14日", "15日": "15日", "16日": "16日", "17日": "17日", "18日": "18日", "19日": "19日", "20日": "20日", "21日": "21日", "22日": "22日", "23日": "23日", "24日": "24日", "25日": "25日", "26日": "26日", "27日": "27日", "28日": "28日", "29日": "29日", "30日": "30日", "31日": "31日"}},
 ]
@@ -44,11 +45,9 @@ def get_tenant_access_token():
 
 # ================= 4. 记忆系统与向量长文档解析 (RAG架构) =================
 def init_databases():
-    """初始化群聊记忆数据库和长文档向量知识库"""
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
-            # 群聊记忆表
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS chat_records (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -58,7 +57,6 @@ def init_databases():
                 create_time DATETIME
             )
             """)
-            # 向量检索知识库表
             cursor.execute("""
             CREATE TABLE IF NOT EXISTS document_vectors (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -69,18 +67,23 @@ def init_databases():
             )
             """)
         conn.commit()
-        print("✅ 记忆系统 (chat_records) 与 向量知识库 (document_vectors) 已就绪！")
+        print("✅ 记忆系统与向量知识库已就绪！")
     except Exception as e:
         print(f"创建记忆/向量表失败: {e}")
     finally:
         conn.close()
 
+scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+
 @app.on_event("startup")
 def on_startup():
     init_databases()
+    # 设定每天 22:30 准时执行日报生成任务
+    scheduler.add_job(generate_and_send_daily_report, 'cron', hour=22, minute=30)
+    scheduler.start()
+    print("✅ 22:30 日报定时引擎已启动！")
 
 def save_chat_history(chat_id, sender_id, text):
-    """保存所有群聊记录（不论是否@）"""
     clean_text = re.sub(r'@_user_\w+', '', text).strip()
     if not clean_text: return
     conn = get_db_connection()
@@ -96,7 +99,6 @@ def save_chat_history(chat_id, sender_id, text):
         conn.close()
 
 def read_feishu_docx(doc_id):
-    """读取飞书文档全文"""
     tenant_token = get_tenant_access_token()
     url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{doc_id}/blocks"
     headers = {"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}
@@ -123,7 +125,6 @@ def read_feishu_docx(doc_id):
         return f"读取文档时发生物理异常: {e}"
 
 def get_text_embedding(text):
-    """文本转 1024 维向量"""
     url = "https://api.siliconflow.cn/v1/embeddings"
     headers = {"Authorization": f"Bearer {SILICONFLOW_API_KEY}", "Content-Type": "application/json"}
     payload = {"model": "BAAI/bge-m3", "input": text}
@@ -135,7 +136,6 @@ def get_text_embedding(text):
         return None
 
 def process_and_store_long_doc(doc_id, full_text):
-    """长文档切块并入库 TiDB Vector"""
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
@@ -159,7 +159,6 @@ def process_and_store_long_doc(doc_id, full_text):
         conn.close()
 
 def search_relevant_doc_chunks(user_question, limit=5):
-    """基于问题从 TiDB 中向量检索最相关的历史段落"""
     question_vec = get_text_embedding(user_question)
     if not question_vec: return ""
     vec_str = "[" + ",".join(map(str, question_vec)) + "]"
@@ -249,7 +248,7 @@ async def manual_sync(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_full_sync)
     return {"status": "success", "message": "全量拉取同步已在后台启动！"}
 
-# ================= 6. Xavier AI 大脑中枢 =================
+# ================= 6. Xavier AI 大脑中枢 & 日报引擎 =================
 def get_database_schema():
     conn = get_db_connection()
     schema_info = ""
@@ -285,6 +284,12 @@ def reply_feishu_message(message_id, text):
     payload = {"msg_type": "text", "content": json.dumps({"text": text})}
     requests.post(url, headers={"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}, json=payload)
 
+def send_feishu_message(receive_id, text, receive_id_type="chat_id"):
+    tenant_token = get_tenant_access_token()
+    url = f"https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type={receive_id_type}"
+    payload = {"receive_id": receive_id, "msg_type": "text", "content": json.dumps({"text": text})}
+    requests.post(url, headers={"Authorization": f"Bearer {tenant_token}", "Content-Type": "application/json"}, json=payload)
+
 def call_ai_api(sys_instruction, history):
     url = "https://api.siliconflow.cn/v1/chat/completions"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {SILICONFLOW_API_KEY}"}
@@ -307,11 +312,76 @@ def call_ai_api(sys_instruction, history):
         except Exception as e: pass
     return "Xavier 的大脑正在高速运转，API 通道稍微拥堵，请尝试拆分您的提问！"
 
+def generate_and_send_daily_report(target_chat_id=None):
+    print("⏰ [任务] 开始生成工作日报...")
+    today_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+    current_month_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y年%m月')
+    
+    conn = get_db_connection()
+    sales_data_raw = ""
+    chat_records_raw = ""
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT 产品名称, 目标, 合计 FROM kunlun_sales WHERE 月份 = %s", (current_month_str,))
+            sales_data_raw += f"【昆仑系列底表数据】: {cursor.fetchall()}\n"
+            
+            cursor.execute("SELECT 产品名称, 目标, 合计 FROM dragons1_sales WHERE 月份 = %s", (current_month_str,))
+            sales_data_raw += f"【小京龙系列底表数据】: {cursor.fetchall()}\n"
+            
+            cursor.execute("SELECT 品类, GSV合计, 目标, 达成率 FROM month_gsv_data WHERE 月份 = %s", (current_month_str,))
+            sales_data_raw += f"【大盘分类底表数据】: {cursor.fetchall()}\n"
+            
+            cursor.execute("SELECT message_text FROM chat_records WHERE DATE(create_time) = %s", (today_str,))
+            chats = cursor.fetchall()
+            chat_records_raw = "\n".join([row['message_text'] for row in chats])
+    except Exception as e:
+        print(f"日报拉取底表数据失败: {e}")
+        return
+    finally:
+        conn.close()
+
+    report_prompt = f"""
+【最高指令】：你是 Xavier。请根据以下我提供的【今日真实数据库底表】和【今日群聊工作记录】，严格按照我指定的固定格式输出 {today_str} 的工作日报。
+【纪律要求】：
+1. 销售数据必须使用底表数据计算填入，绝对不许凭空捏造数字！
+2. 运营、推广动作和待办事项，请从群聊记录中提炼汇总。如果没有相关记录，请直接填写“今日暂无相关群聊记录”。
+3. 严格使用以下格式，不要多加任何寒暄语。
+
+【必须使用的输出格式模板】：
+一、销售数据
+1、月出库进度：月度累计达成/目标，达成率是多少？分品类各是多少？达成率分别是多少？
+2、月零售进度：月度累计达成/目标，达成率是多少？分品类各是多少金额 ？达成率分别是多少？
+3、昆仑系列达成进度：月度累计达成合计/昆仑系列总目标，达成率是多少？分型号各多少台？
+4、小京龙系列达成进度：月度累计达成合计/小京龙系列总目标，达成率是多少？分型号各多少台？
+
+二、日重点工作闭环：
+1、运营动作：（分小京龙系列和昆仑系列总结）
+2、推广动作：（分小京龙系列和昆仑系列总结）
+3、其它工作简报：
+
+三、待办事项（待完成工作）及规划完成时间
+
+---
+以下是供你提取的原始素材：
+【今日真实数据库底表】：
+{sales_data_raw}
+
+【今日京东渠道群及AI大战群的群聊记录】：
+{chat_records_raw}
+"""
+    ai_report = call_ai_api(report_prompt, [])
+    
+    # ⚠️ 极度关键：填入你真实的默认群聊 chat_id
+    DEFAULT_GROUP_CHAT_ID = "请在此处填入日报群的chat_id" 
+    
+    send_to_id = target_chat_id if target_chat_id else DEFAULT_GROUP_CHAT_ID
+    send_feishu_message(send_to_id, ai_report, receive_id_type="chat_id")
+    print(f"✅ 工作日报已成功推送至 {send_to_id}！")
+
 def process_message(message_id, user_text, chat_id):
     if chat_id not in history_memory:
         history_memory[chat_id] = []
     
-    # 🌟 1. 嗅探链接并切片入库（包含 Docx 和 Wiki 兼容）
     link_match = re.search(r'https://[a-zA-Z0-9-]+\.feishu\.cn/(docx|wiki)/([a-zA-Z0-9]+)', user_text)
     if link_match:
         link_type = link_match.group(1)
@@ -326,7 +396,6 @@ def process_message(message_id, user_text, chat_id):
         else:
             user_text += f"\n\n【系统提示】读取失败，提醒用户开通权限。"
 
-    # 🌟 2. 向量大海捞针检索
     clean_query = re.sub(r'https://[a-zA-Z0-9-]+\.feishu\.cn/\S+', '', user_text).strip()
     if clean_query: 
         relevant_context = search_relevant_doc_chunks(clean_query, limit=5)
@@ -338,9 +407,10 @@ def process_message(message_id, user_text, chat_id):
     
     db_schema = get_database_schema()
     today_date = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+    yesterday_date = (datetime.now(timezone(timedelta(hours=8))) - timedelta(days=1)).strftime('%Y-%m-%d')
     
-    sys_instruction = f"""你的名字叫Xavier，是家电行业资深电商运营专家，擅长电商数据分析。
-直连 TiDB。当前北京时间：{today_date}。表中的金额（GSV等）已是纯数字(DOUBLE)。
+    sys_instruction = f"""你的名字叫Xavier，是家电行业电商资深运营专家。
+直连 TiDB。当前北京时间：{today_date}，昨天日期是：{yesterday_date}。表中的金额（GSV等）已是纯数字(DOUBLE)。
 
 当前表结构：
 {db_schema}
@@ -353,9 +423,10 @@ def process_message(message_id, user_text, chat_id):
    - 单日查询示例：SELECT IFNULL(SUM(`5日`), 0) FROM kunlun_sales WHERE 月份 = '2026年06月'
    - 跨月查询示例：SELECT SUM(CASE WHEN 月份='2026年05月' THEN IFNULL(`31日`,0) ELSE 0 END) + SUM(CASE WHEN 月份='2026年06月' THEN IFNULL(`1日`,0) ELSE 0 END) FROM kunlun_sales
 3. 【记忆】：问“群里聊了什么”，去查 `chat_records` 表。
+4. 【🚨 日报专属防崩溃铁律】：当用户要求“输出日报”或“工作日报”时，【绝对禁止】试图用 UNION ALL 强行拼接大盘表和系列宽表！你只需查询 `daily_category_gsv` 输出大盘和分品类的整体宏观数据即可。
 
-【🤖 工作流纪律】
-阶段一：仅思考并输出一段被 ```sql ``` 包裹的代码！绝对禁止输出假数据示例或文字。
+【🤖 工作流纪律（致命铁律）】
+阶段一：只要用户索要数据（包括用户纠正了你的日期或条件），你【必须】重新进入阶段一，输出一段被 ```sql ``` 包裹的代码去查数据库！绝对禁止在不执行 SQL 的情况下直接修改历史回复敷衍用户。
 阶段二：收到真实数据后汇报。若结果为空/NULL/None，如实回答数据未录入，严禁瞎编。
 
 【⚙️ 物理限制】每次仅支持单条 SQL！多维度合并请用 UNION ALL。
@@ -387,7 +458,7 @@ def process_message(message_id, user_text, chat_id):
         
     reply_feishu_message(message_id, ai_reply)
 
-# ================= 7. 飞书 Webhook 接收入口 (精准防干扰版) =================
+# ================= 7. 飞书 Webhook 接收入口 (精准防干扰 + 快捷指令拦截) =================
 @app.post("/webhook")
 async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
     body = await request.json()
@@ -413,23 +484,24 @@ async def feishu_webhook(request: Request, background_tasks: BackgroundTasks):
         
         # 🌟 第二层动作：身份甄别（判断是否需要大脑开口回复）
         should_reply = False
-        
         if chat_type == "p2p":
-            # 规则 1：私聊场景，有问必答
             should_reply = True
         elif chat_type == "group":
-            # 规则 2：群聊场景，极其严格的 @ 拦截机制
             mentions = msg.get("mentions", [])
             for m in mentions:
-                # 检查 mentions 数组里，是否包含了机器人的身份标志 (bot_id) 或名称
                 if "bot_id" in m.get("id", {}) or m.get("name", "").lower() in ["xavier", "机器人"]:
                     should_reply = True
                     break
                 
-        # 只有通过了身份甄别，才会调用大模型进行运算回复
+        # 🌟 第三层动作：处理回复与快捷拦截
         if should_reply:
-            # 清理文本中的飞书 @ 标签乱码
             clean_text = re.sub(r'@_user_\w+', '', user_text).strip()
-            background_tasks.add_task(process_message, message_id, clean_text, chat_id)
+            
+            # 日报专属快捷指令嗅探拦截
+            if "日报" in clean_text and any(kw in clean_text for kw in ["发", "写", "生成", "输出", "看"]):
+                background_tasks.add_task(reply_feishu_message, message_id, "收到指令！Xavier 正在为您火速盘点今日真实数据与群聊记录，请稍候约 30-60 秒...")
+                background_tasks.add_task(generate_and_send_daily_report, chat_id)
+            else:
+                background_tasks.add_task(process_message, message_id, clean_text, chat_id)
             
     return {"status": "ok"}
