@@ -328,7 +328,7 @@ def generate_and_send_daily_report(target_chat_id=None):
             cursor.execute("SELECT 产品名称, 目标, 合计 FROM dragons1_sales WHERE 月份 = %s", (current_month_str,))
             sales_data_raw += f"【小京龙系列底表数据】: {cursor.fetchall()}\n"
             
-            cursor.execute("SELECT 品类, GSV合计, 目标, 达成率 FROM month_gsv_data WHERE 月份 = %s", (current_month_str,))
+            cursor.execute("SELECT 品类, 合计, 目标, 达成率 FROM month_gsv_data WHERE 月份 = %s", (current_month_str,))
             sales_data_raw += f"【大盘分类底表数据】: {cursor.fetchall()}\n"
             
             cursor.execute("SELECT message_text FROM chat_records WHERE DATE(create_time) = %s", (today_str,))
