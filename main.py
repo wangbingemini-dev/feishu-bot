@@ -426,8 +426,12 @@ def process_message(message_id, user_text, chat_id):
 
 【🔥 业务字典与防错铁律】
 1. 【大盘】：问总额、各品类销售，优先查 `daily_category_gsv`。
-2. 【特定系列（⚠️宽表法则）】：昆仑或小京龙必须查 `kunlun_sales` 或 `dragons1_sales`。跨月必须用 CASE WHEN 和 IFNULL。
-3. 【📅 时间段聚合法则】：查询“某日至某日”，必须转化为 YYYY-MM-DD，使用 BETWEEN 语法查流水表。
+2. 【特定系列（⚠️极其重要的宽表法则）】：昆仑或小京龙必须查 `kunlun_sales` 或 `dragons1_sales`。
+   - 绝密警告：这两张表是【宽表】，日期是【列名】（如 `1日`, `2日`...`31日`），行标识是【月份】（如 '2026年06月'）。
+   - 查单日：SELECT SUM(`5日`) FROM dragons1_sales WHERE 月份='2026年06月'
+   - 查时间段（如5日至11日），必须横向相加列名：SELECT SUM(IFNULL(`5日`,0)+IFNULL(`6日`,0)+IFNULL(`7日`,0)+IFNULL(`8日`,0)+IFNULL(`9日`,0)+IFNULL(`10日`,0)+IFNULL(`11日`,0)) FROM dragons1_sales WHERE 月份='2026年06月'
+   - 严禁在宽表中使用 BETWEEN 日期！
+3. 【📅 大盘时间段法则】：只有查询流水表（如 `daily_category_gsv`）的“某日至某日”时，才能转化为 YYYY-MM-DD 并使用 BETWEEN 语法。
 
 【🚨 零幻觉与实体封杀令（最高级别的生死铁律）】
 1. 你的数据世界里【只有】数据库里真实存在的店铺和品类！
