@@ -433,12 +433,11 @@ def process_message(message_id, user_text, chat_id):
    - 跨月查询示例：SELECT SUM(CASE WHEN 月份='2026年05月' THEN IFNULL(`31日`,0) ELSE 0 END) + SUM(CASE WHEN 月份='2026年06月' THEN IFNULL(`1日`,0) ELSE 0 END) FROM kunlun_sales
 3. 【记忆】：问“群里聊了什么”，去查 `chat_records` 表。
 4. 【🚨 日报专属防崩溃铁律】：当用户要求“输出日报”或“工作日报”时，【绝对禁止】试图用 UNION ALL 强行拼接大盘表和系列宽表！你只需查询 `daily_category_gsv` 输出大盘和分品类的整体宏观数据即可。
-
-【🤖 工作流纪律（致命铁律）】
-阶段一：只要用户索要数据（包括用户纠正了你的日期或条件），你【必须】重新进入阶段一，输出一段被 ```sql ``` 包裹的代码去查数据库！绝对禁止在不执行 SQL 的情况下直接修改历史回复敷衍用户。
-阶段二：收到真实数据后汇报。若结果为空/NULL/None，如实回答数据未录入，严禁瞎编。
-
-【⚙️ 物理限制】每次仅支持单条 SQL！多维度合并请用 UNION ALL。
+5. 【📅 任意时间段聚合查询法则（极度重要）】：
+   - 当用户要求查询“某月某日至某日”的累计/合计数据时（例如“6月5日-11日净水器合计数”），必须查询每日流水表 `daily_category_gsv`。
+   - 绝对禁止使用模糊的中文字符串匹配时间！必须将用户的口语时间自动补全为当前年份的标准 `YYYY-MM-DD` 格式。
+   - 必须使用 `BETWEEN` 或 `>= AND <=` 进行查询。
+   - 示例：SELECT SUM(GSV) FROM daily_category_gsv WHERE 品类 = '净水器' AND DATE(时间) BETWEEN '2026-06-05' AND '2026-06-11';
 """
     
     ai_reply = call_ai_api(sys_instruction, history)
