@@ -1,6 +1,6 @@
 fastapi
-requests
 uvicorn
+requests
 pymysql
 apscheduler
-pip install lark-oapi
+lark-oapi
