@@ -3,3 +3,4 @@ requests
 uvicorn
 pymysql
 apscheduler
+pip install lark-oapi
