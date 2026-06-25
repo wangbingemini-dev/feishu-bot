@@ -10,7 +10,6 @@ from fastapi import FastAPI, BackgroundTasks
 
 # 👇 引入飞书官方 SDK（用于长链接）
 import lark_oapi as lark
-from lark_oapi.api.im.v1 import P2MessageReceiveV1
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -286,7 +285,7 @@ def process_message(message_id, user_text, chat_id):
 
 # ================= 6. 飞书长链接 WebSocket 引擎 (核心改造区) =================
 
-def handle_ws_message(data: P2MessageReceiveV1) -> None:
+def handle_ws_message(data) -> None:
     """这是接收飞书长链接消息的处理中枢"""
     # 将 SDK 的对象反序列化为我们熟悉的字典格式
     raw_json = lark.JSON.marshal(data)
