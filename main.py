@@ -271,8 +271,7 @@ def process_message(message_id, user_text, chat_id):
     
     sql_query = None
     if "```sql" in ai_reply.lower() and "```" in ai_reply:
-        match = re.search(r'```sql(.*?)
-```', ai_reply, re.DOTALL | re.IGNORECASE)
+        match = re.search(r'```sql(.*?)```', ai_reply, re.DOTALL | re.IGNORECASE)
         if match: sql_query = match.group(1).strip()
 
     if sql_query:
