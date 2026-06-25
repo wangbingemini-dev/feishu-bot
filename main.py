@@ -87,8 +87,9 @@ def save_chat_history(chat_id, sender_id, text):
             now_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute(sql, (chat_id, sender_id, clean_text, now_str))
         conn.commit()
+        print(f"✅ [记忆存入成功] {clean_text[:15]}...") # 新增监控
     except Exception as e:
-        pass
+        print(f"❌ [存入数据库报错]: {e}") # 暴露致命错误
     finally:
         conn.close()
 
@@ -287,50 +288,52 @@ def process_message(message_id, user_text, chat_id):
 
 def handle_ws_message(data) -> None:
     """这是接收飞书长链接消息的处理中枢"""
-    # 将 SDK 的对象反序列化为我们熟悉的字典格式
-    raw_json = lark.JSON.marshal(data)
-    event_dict = json.loads(raw_json)
-    
-    event = event_dict.get("event", {})
-    msg = event.get("message", {})
-    
-    message_id = msg.get("message_id")
-    chat_id = msg.get("chat_id")
-    chat_type = msg.get("chat_type", "p2p")
-    sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "unknown")
-    
-    if msg.get("message_type") == "text":
-        if message_id in processed_message_ids: return
-        processed_message_ids.add(message_id)
+    try:
+        # 新增监控：看看有没有数据流进来
+        print(f"📦 [WS 接收到消息，开始解析...]") 
         
-        content = json.loads(msg.get("content", "{}"))
-        user_text = content.get("text", "")
+        raw_json = lark.JSON.marshal(data)
+        event_dict = json.loads(raw_json)
         
-        # 🌟 1. 潜水模式：毫不犹豫存入 TiDB 记忆库
-        threading.Thread(target=save_chat_history, args=(chat_id, sender_id, user_text)).start()
+        event = event_dict.get("event", {})
+        msg = event.get("message", {})
         
-        # 🌟 2. 身份甄别：判断是不是在喊我
-        should_reply = False
-        if chat_type == "p2p":
-            should_reply = True
-        elif chat_type == "group":
-            mentions = msg.get("mentions", [])
-            for m in mentions:
-                if "bot_id" in m.get("id", {}) or m.get("name", "").lower() in ["xavier", "机器人"]:
-                    should_reply = True
-                    break
-                    
-        # 🌟 3. 拦截器与大模型处理
-        if should_reply:
-            clean_text = re.sub(r'@_user_\w+', '', user_text).strip()
+        message_id = msg.get("message_id")
+        chat_id = msg.get("chat_id")
+        chat_type = msg.get("chat_type", "p2p")
+        sender_id = event.get("sender", {}).get("sender_id", {}).get("open_id", "unknown")
+        
+        if msg.get("message_type") == "text":
+            if message_id in processed_message_ids: return
+            processed_message_ids.add(message_id)
             
-            # 日报快捷拦截
-            if "日报" in clean_text and any(kw in clean_text for kw in ["发", "写", "生成", "输出", "看"]):
-                threading.Thread(target=reply_feishu_message, args=(message_id, "收到指令！Xavier 正在通过长链接为您提取今日数据与潜水记忆，请稍候约 30-60 秒...")).start()
-                threading.Thread(target=generate_and_send_daily_report, args=(chat_id,)).start()
-            else:
-                # 正常问答流
-                threading.Thread(target=process_message, args=(message_id, clean_text, chat_id)).start()
+            content = json.loads(msg.get("content", "{}"))
+            user_text = content.get("text", "")
+            
+            # 🌟 1. 潜水模式：存入 TiDB
+            threading.Thread(target=save_chat_history, args=(chat_id, sender_id, user_text)).start()
+            
+            # 🌟 2. 身份甄别
+            should_reply = False
+            if chat_type == "p2p":
+                should_reply = True
+            elif chat_type == "group":
+                mentions = msg.get("mentions", [])
+                for m in mentions:
+                    if "bot_id" in m.get("id", {}) or m.get("name", "").lower() in ["xavier", "机器人"]:
+                        should_reply = True
+                        break
+                        
+            # 🌟 3. 拦截器与大模型处理
+            if should_reply:
+                clean_text = re.sub(r'@_user_\w+', '', user_text).strip()
+                if "日报" in clean_text and any(kw in clean_text for kw in ["发", "写", "生成", "输出", "看"]):
+                    threading.Thread(target=reply_feishu_message, args=(message_id, "收到指令！Xavier 正在通过长链接为您提取今日数据与潜水记忆，请稍候约 30-60 秒...")).start()
+                    threading.Thread(target=generate_and_send_daily_report, args=(chat_id,)).start()
+                else:
+                    threading.Thread(target=process_message, args=(message_id, clean_text, chat_id)).start()
+    except Exception as e:
+        print(f"❌ [WS 消息处理极其严重报错]: {e}")
 
 def start_feishu_ws_client():
     """在后台独立运行的 WebSocket 守护进程"""
