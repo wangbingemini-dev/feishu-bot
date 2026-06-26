@@ -429,14 +429,25 @@ def execute_full_sync():
                 sql_insert = f"INSERT INTO {db_table} ({', '.join([f'`{f}`' for f in fields_db])}) VALUES ({', '.join(['%s'] * len(fields_db))})"
                 
                 batch_data = []
+                batch_data = []
                 for record in all_records:
                     fields = record.get("fields", {})
                     row = []
                     for fs_key in fields_fs:
                         val = fields.get(fs_key)
-                        # 如果是多维表格的高级复杂文本结构，转为字符串存储
-                        if isinstance(val, list) or isinstance(val, dict):
+                        
+                        # 🌟 新增核心修复：拦截飞书的 13 位毫秒时间戳并翻译
+                        if isinstance(val, int) and len(str(val)) == 13:
+                            try:
+                                # 将毫秒时间戳转化为北京时间的标准日期字符串
+                                val = datetime.fromtimestamp(val / 1000.0, timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+                            except Exception:
+                                pass # 如果转换失败，保持原样
+                                
+                        # 原有的复杂结构转化逻辑
+                        elif isinstance(val, list) or isinstance(val, dict):
                             val = json.dumps(val, ensure_ascii=False)
+                            
                         row.append(val)
                     batch_data.append(row)
                 
