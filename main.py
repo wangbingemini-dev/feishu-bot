@@ -355,15 +355,115 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 def on_startup():
     init_databases()
     
-    # 启动定时日报
+    # 定时日报任务
     scheduler.add_job(generate_and_send_daily_report, 'cron', hour=22, minute=30)
+    
+    # 🌟 注册自动生物钟：每隔 2 小时自动同步一次飞书多维表格
+    scheduler.add_job(execute_full_sync, 'interval', hours=2)
+    
     scheduler.start()
     
-    # 🌟 关键：在一个独立的后台线程中启动长链接，绝对不阻塞 FastAPI 的存活接口
+    # 启动长链接线程
     ws_thread = threading.Thread(target=start_feishu_ws_client, daemon=True)
     ws_thread.start()
-    print("✅ 飞书长链接 WebSocket 守护进程已成功启动！")
 
+# ================= 5.5 新增：飞书多维表格全量同步中枢 =================
+
+def execute_full_sync():
+    """从飞书多维表格拉取全量数据并批量写入 TiDB"""
+    print("🔄 [同步任务] 开始从飞书多维表格拉取最新数据...")
+    tenant_token = get_tenant_access_token()
+    if not tenant_token:
+        print("❌ [同步任务] 获取 tenant_access_token 失败，终止同步。")
+        return False
+        
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            for config in TABLE_CONFIGS:
+                table_id = config["table_id"]
+                db_table = config["db_table"]
+                mapping = config["mapping"]
+                
+                # 过滤未配置或占位符的表格
+                if "REPLACE_WITH" in table_id:
+                    continue
+                    
+                print(f"⏳ 正在同步底表: {db_table} ...")
+                
+                # 1. 流式分页读取飞书多维表格数据
+                url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{WIKI_TOKEN}/tables/{table_id}/records"
+                headers = {"Authorization": f"Bearer {tenant_token}"}
+                
+                all_records = []
+                page_token = ""
+                has_more = True
+                
+                while has_more:
+                    params = {"page_size": 500}
+                    if page_token:
+                        params["page_token"] = page_token
+                    
+                    res = requests.get(url, headers=headers, params=params).json()
+                    if res.get("code") != 0:
+                        print(f"❌ 读取飞书表 {db_table} 失败: {res.get('msg')}")
+                        break
+                        
+                    data_page = res.get("data", {})
+                    all_records.extend(data_page.get("items", []))
+                    has_more = data_page.get("has_more", False)
+                    page_token = data_page.get("page_token", "")
+                
+                if not all_records:
+                    print(f"⚠️ 飞书表 {db_table} 未检测到任何真实数据，跳过写入。")
+                    continue
+                    
+                # 2. 清空旧数据防止数据重叠
+                cursor.execute(f"TRUNCATE TABLE {db_table}")
+                
+                # 3. 映射字段并批量构造插入
+                fields_db = list(mapping.values())
+                fields_fs = list(mapping.keys())
+                
+                # 构造标准 SQL 插入语句
+                sql_insert = f"INSERT INTO {db_table} ({', '.join([f'`{f}`' for f in fields_db])}) VALUES ({', '.join(['%s'] * len(fields_db))})"
+                
+                batch_data = []
+                for record in all_records:
+                    fields = record.get("fields", {})
+                    row = []
+                    for fs_key in fields_fs:
+                        val = fields.get(fs_key)
+                        # 如果是多维表格的高级复杂文本结构，转为字符串存储
+                        if isinstance(val, list) or isinstance(val, dict):
+                            val = json.dumps(val, ensure_ascii=False)
+                        row.append(val)
+                    batch_data.append(row)
+                
+                if batch_data:
+                    cursor.executemany(sql_insert, batch_data)
+                    print(f"✅ 表 {db_table} 同步成功，顺畅写入 {len(batch_data)} 条记录！")
+                    
+            conn.commit()
+            print("🎉 [同步任务] 恭喜！飞书多维表格全量数据已完美同步至 TiDB 数据库！")
+            return True
+    except Exception as e:
+        print(f"❌ [同步任务] 发生严重异常崩溃: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+@app.get("/force-sync")
+def force_sync_endpoint(background_tasks: BackgroundTasks):
+    """公开手动触发接口：支持随时随地在浏览器输入网址拉取全量同步"""
+    # 使用 FastAPI 的 BackgroundTasks 异步执行，防止浏览器等待超时导致报错
+    background_tasks.add_task(execute_full_sync)
+    return {
+        "status": "success", 
+        "message": "全量数据同步指令已下发！Xavier 正在后台火速搬运飞书多维表格，请静候 10 秒后刷新数据库查看数据。"
+    }
+    
 @app.get("/")
 @app.head("/")
 def health_check():
