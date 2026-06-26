@@ -365,6 +365,7 @@ def on_startup():
     print("✅ 飞书长链接 WebSocket 守护进程已成功启动！")
 
 @app.get("/")
+@app.head("/")
 def health_check():
     """保留这个根目录用于响应 Render 的存活健康检查"""
     return {"status": "Xavier is alive and WebSocket is connected!"}
