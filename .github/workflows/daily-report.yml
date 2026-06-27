@@ -26,7 +26,6 @@ jobs:
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
       FEISHU_REPORT_RECEIVE_ID: ${{ secrets.FEISHU_REPORT_RECEIVE_ID }}
       FEISHU_REPORT_RECEIVE_ID_TYPE: chat_id
-      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
       LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
       LLM_MODEL: ${{ secrets.LLM_MODEL }}
       OBSIDIAN_GITHUB_REPO: ${{ secrets.OBSIDIAN_GITHUB_REPO }}

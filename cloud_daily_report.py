@@ -206,9 +206,11 @@ def summarize_rows(rows: list[dict[str, Any]], limit: int = 80) -> str:
 
 
 def call_ai_api(prompt: str) -> str:
-    api_key = env_any(["SILICONFLOW_API_KEY", "LLM_API_KEY"], required=True)
+    api_key = env_any(["SILICONFLOW_API_KEY", "LLM_API_KEY"])
+    if not api_key:
+        raise DailyReportError("缺少必要环境变量: SILICONFLOW_API_KEY 或 LLM_API_KEY")
     if api_key == "your_llm_api_key":
-        raise DailyReportError("LLM_API_KEY 仍是占位符，请在 Render 中配置真实模型 API Key。")
+        raise DailyReportError("LLM_API_KEY 仍是占位符。")
     base_url = (env_any(["SILICONFLOW_BASE_URL", "LLM_BASE_URL"], "https://api.siliconflow.cn/v1") or "").rstrip("/")
     model = env_any(["DAILY_REPORT_MODEL", "LLM_MODEL"], "deepseek-ai/DeepSeek-V3") or "deepseek-ai/DeepSeek-V3"
     response = requests.post(
@@ -230,6 +232,101 @@ def call_ai_api(prompt: str) -> str:
     response.raise_for_status()
     data = response.json()
     return data["choices"][0]["message"]["content"].strip()
+
+
+def number_value(value: Any) -> float:
+    if value in (None, ""):
+        return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def format_number(value: Any, unit: str = "") -> str:
+    num = number_value(value)
+    if abs(num - round(num)) < 0.005:
+        text = f"{num:,.0f}"
+    else:
+        text = f"{num:,.2f}"
+    return f"{text}{unit}"
+
+
+def format_percent(value: Any) -> str:
+    if value in (None, ""):
+        return "暂无"
+    text = str(value)
+    if "%" in text:
+        return text
+    num = number_value(value)
+    if abs(num) <= 1:
+        num *= 100
+    return f"{num:.1f}%"
+
+
+def top_rows(rows: list[dict[str, Any]], field: str, limit: int = 5) -> list[dict[str, Any]]:
+    return sorted(rows, key=lambda row: number_value(row.get(field)), reverse=True)[:limit]
+
+
+def build_rule_based_report(sales_snapshot: dict[str, Any], chat_snapshot: dict[str, Any]) -> str:
+    report_date = sales_snapshot["report_date"]
+    daily_gsv = sales_snapshot["daily_category_gsv"]
+    month_gsv = sales_snapshot["month_gsv_data"]
+    kunlun = sales_snapshot["kunlun_sales"]
+    dragons = sales_snapshot["dragons1_sales"]
+    messages = [row.get("message_text", "").strip() for row in chat_snapshot.get("messages", []) if row.get("message_text")]
+
+    total_daily_gsv = sum(number_value(row.get("GSV")) for row in daily_gsv)
+    total_daily_target = sum(number_value(row.get("目标")) for row in daily_gsv)
+    total_month_gsv = sum(number_value(row.get("合计")) for row in month_gsv)
+    total_month_target = sum(number_value(row.get("目标")) for row in month_gsv)
+    kunlun_total = sum(number_value(row.get("合计")) for row in kunlun)
+    kunlun_target = sum(number_value(row.get("目标")) for row in kunlun)
+    dragons_total = sum(number_value(row.get("合计")) for row in dragons)
+    dragons_target = sum(number_value(row.get("目标")) for row in dragons)
+
+    lines = [
+        f"# {report_date} 工作日报",
+        "",
+        "## 一、销售数据",
+        "",
+        f"- 当日大盘 GSV：{format_number(total_daily_gsv, '元')}；当日目标：{format_number(total_daily_target, '元')}；当日目标达成率：{format_percent(total_daily_gsv / total_daily_target if total_daily_target else '')}。",
+        f"- 月累计大盘 GSV：{format_number(total_month_gsv, '元')}；月目标：{format_number(total_month_target, '元')}；月累计达成率：{format_percent(total_month_gsv / total_month_target if total_month_target else '')}。",
+        f"- 昆仑系列月累计销量：{format_number(kunlun_total, '台')}；目标：{format_number(kunlun_target, '台')}；达成率：{format_percent(kunlun_total / kunlun_target if kunlun_target else '')}。",
+        f"- 小京龙系列月累计销量：{format_number(dragons_total, '台')}；目标：{format_number(dragons_target, '台')}；达成率：{format_percent(dragons_total / dragons_target if dragons_target else '')}。",
+        "",
+    ]
+
+    if daily_gsv:
+        lines.extend(["重点品类表现："])
+        for row in top_rows(daily_gsv, "GSV"):
+            lines.append(
+                f"- {row.get('店铺', '未知店铺')} / {row.get('品类', '未知品类')}：GSV {format_number(row.get('GSV'), '元')}，同比 {format_percent(row.get('同比'))}，目标达成率 {format_percent(row.get('目标达成率'))}。"
+            )
+        lines.append("")
+
+    lines.extend(["## 二、当天运营动作汇总", ""])
+    if messages:
+        for msg in messages[:12]:
+            lines.append(f"- {msg}")
+        if len(messages) > 12:
+            lines.append(f"- 其余 {len(messages) - 12} 条聊天记录已归档至 TiDB。")
+    else:
+        lines.append("- 暂无明确记录")
+
+    lines.extend(
+        [
+            "",
+            "## 三、明天工作规划",
+            "",
+            "- 跟进低于目标进度的店铺、品类和单品，优先排查流量、转化、库存和价格动作。",
+            "- 复盘当日高贡献品类和商品，确认可复制的运营动作并延续到次日。",
+            "- 持续关注 TiDB 数据回填情况，以下一轮稳定快照为准更新日报口径。",
+            "",
+            f"> 数据来源：TiDB 云端快照；查询时间：{sales_snapshot['source_queried_at']}；快照哈希：{sales_snapshot['snapshot_sha256']}。",
+        ]
+    )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def build_report_markdown(sales_snapshot: dict[str, Any], chat_snapshot: dict[str, Any]) -> str:
@@ -281,7 +378,10 @@ reconciliation: {json.dumps(sales_snapshot.get("reconciliation", {}), ensure_asc
 --- 当天聊天记录 ---
 {chat_text}
 """
-    markdown = call_ai_api(prompt)
+    try:
+        markdown = call_ai_api(prompt)
+    except DailyReportError:
+        markdown = build_rule_based_report(sales_snapshot, chat_snapshot)
     if not markdown.startswith(f"# {report_date} 工作日报"):
         markdown = f"# {report_date} 工作日报\n\n{markdown}"
     return markdown.rstrip() + "\n"
