@@ -35,8 +35,8 @@ jobs:
           OBSIDIAN_GITHUB_TOKEN: ${{ secrets.OBSIDIAN_GITHUB_TOKEN }}
           OBSIDIAN_REPORT_DIR: ${{ secrets.OBSIDIAN_REPORT_DIR }}
           DAILY_REPORT_USE_LLM: "false"
-          DAILY_REPORT_STABILITY_DEADLINE_MINUTES: "0"
-          DAILY_REPORT_STABILITY_INTERVAL_SECONDS: "1"
+          DAILY_REPORT_STABILITY_DEADLINE_MINUTES: "15"
+          DAILY_REPORT_STABILITY_INTERVAL_SECONDS: "60"
         run: |
           python - <<'PY'
           import json
