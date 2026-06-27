@@ -6,7 +6,7 @@ import pymysql
 import re
 import threading
 from datetime import datetime, timezone, timedelta
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Header, HTTPException
 
 # 👇 引入飞书官方 SDK（用于长链接）
 import lark_oapi as lark
@@ -355,8 +355,9 @@ scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
 def on_startup():
     init_databases()
     
-    # 定时日报任务
-    scheduler.add_job(generate_and_send_daily_report, 'cron', hour=22, minute=30)
+    # 云端正式日报由 Render Cron Job 执行；仅在显式开启时保留进程内定时，避免重复发送。
+    if os.environ.get("ENABLE_IN_PROCESS_DAILY_REPORT", "false").lower() in {"1", "true", "yes"}:
+        scheduler.add_job(generate_and_send_daily_report, 'cron', hour=22, minute=30)
     
     # 🌟 注册自动生物钟：每隔 2 小时自动同步一次飞书多维表格
     scheduler.add_job(execute_full_sync, 'interval', hours=2)
@@ -474,6 +475,17 @@ def force_sync_endpoint(background_tasks: BackgroundTasks):
         "status": "success", 
         "message": "全量数据同步指令已下发！Xavier 正在后台火速搬运飞书多维表格，请静候 10 秒后刷新数据库查看数据。"
     }
+
+@app.post("/tasks/daily-report")
+def daily_report_endpoint(x_task_token: str | None = Header(default=None)):
+    """受保护的手动触发接口，方便 Render 外部健康检查或临时补跑。"""
+    expected_token = os.environ.get("DAILY_REPORT_TASK_TOKEN")
+    if expected_token and x_task_token != expected_token:
+        raise HTTPException(status_code=403, detail="invalid task token")
+
+    from cloud_daily_report import run_daily_report
+
+    return run_daily_report()
     
 @app.get("/")
 @app.head("/")
