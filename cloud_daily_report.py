@@ -533,6 +533,23 @@ def already_sent(report_date: str, report_sha256: str) -> bool:
         conn.close()
 
 
+def already_sent_snapshot(report_date: str, snapshot_sha256: str) -> bool:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id FROM daily_report_runs
+                WHERE report_date = %s AND snapshot_sha256 = %s AND status = 'sent'
+                LIMIT 1
+                """,
+                (report_date, snapshot_sha256),
+            )
+            return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def record_run(
     report_date: str,
     report_sha256: str,
@@ -602,10 +619,17 @@ def _run_daily_report() -> dict[str, Any]:
     report_sha256 = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 
     obsidian_result = write_obsidian_markdown(report_date, markdown)
-    if already_sent(report_date, report_sha256) and (env("FORCE_DAILY_REPORT_SEND", "false") or "false").lower() not in {"1", "true", "yes"}:
+    force_send = (env("FORCE_DAILY_REPORT_SEND", "false") or "false").lower() in {"1", "true", "yes"}
+    if (
+        not force_send
+        and (
+            already_sent(report_date, report_sha256)
+            or already_sent_snapshot(report_date, sales_snapshot["snapshot_sha256"])
+        )
+    ):
         return {
             "status": "skipped",
-            "reason": "same report already sent",
+            "reason": "same report snapshot already sent",
             "report_date": report_date,
             "report_sha256": report_sha256,
             "snapshot_sha256": sales_snapshot["snapshot_sha256"],
