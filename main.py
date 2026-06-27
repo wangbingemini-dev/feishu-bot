@@ -524,7 +524,7 @@ async def daily_report_endpoint(request: Request, x_task_token: str | None = Hea
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         print(f"❌ [云端日报任务失败]: {exc}")
-        raise HTTPException(status_code=500, detail="daily report task failed") from exc
+        raise HTTPException(status_code=500, detail=f"daily report task failed: {exc}") from exc
     
 @app.get("/")
 @app.head("/")
