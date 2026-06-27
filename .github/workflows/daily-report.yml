@@ -75,8 +75,35 @@ jobs:
           )
           try:
               with urllib.request.urlopen(request, timeout=1800) as response:
-                  print(response.read().decode("utf-8"))
+                  body = response.read().decode("utf-8")
           except urllib.error.HTTPError as exc:
               print(exc.read().decode("utf-8"))
               raise
+
+          print(body)
+          data = json.loads(body)
+          task_id = data.get("task_id")
+          if not task_id:
+              raise SystemExit("Render daily report response did not include task_id")
+
+          status_url = os.environ["RENDER_DAILY_REPORT_URL"].rstrip("/") + "/" + task_id
+          for attempt in range(180):
+              status_request = urllib.request.Request(
+                  status_url,
+                  headers={"X-Task-Token": os.environ["TASK_TOKEN"]},
+                  method="GET",
+              )
+              with urllib.request.urlopen(status_request, timeout=30) as response:
+                  status_body = response.read().decode("utf-8")
+              status_data = json.loads(status_body)
+              status = status_data.get("status")
+              print(json.dumps(status_data, ensure_ascii=False))
+              if status == "succeeded":
+                  break
+              if status == "failed":
+                  raise SystemExit(status_data.get("error") or "Render daily report task failed")
+              import time
+              time.sleep(10)
+          else:
+              raise SystemExit("Timed out waiting for Render daily report task")
           PY

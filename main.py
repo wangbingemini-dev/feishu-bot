@@ -5,6 +5,7 @@ import requests
 import pymysql
 import re
 import threading
+import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Request
 
@@ -30,6 +31,7 @@ WIKI_TOKEN = "Re61wxHP9iO5NFk6IshckxNYnKc"
 history_memory = {}
 processed_message_ids = set()
 daily_report_lock = threading.Lock()
+daily_report_tasks = {}
 
 # ================= 2. 飞书数据地图 =================
 TABLE_CONFIGS = [
@@ -477,14 +479,40 @@ def force_sync_endpoint(background_tasks: BackgroundTasks):
         "message": "全量数据同步指令已下发！Xavier 正在后台火速搬运飞书多维表格，请静候 10 秒后刷新数据库查看数据。"
     }
 
-@app.post("/tasks/daily-report")
-async def daily_report_endpoint(request: Request, x_task_token: str | None = Header(default=None)):
-    """GitHub Actions 调用的云端日报任务入口。"""
+def validate_daily_report_task_token(x_task_token: str | None) -> None:
     expected_token = os.environ.get("DAILY_REPORT_TASK_TOKEN") or os.environ.get("FEISHU_APP_SECRET")
     if not expected_token or x_task_token != expected_token:
         raise HTTPException(status_code=403, detail="invalid task token")
 
-    from cloud_daily_report import DailyReportError, run_daily_report
+
+def run_daily_report_task(task_id, env_overrides):
+    from cloud_daily_report import run_daily_report
+
+    daily_report_tasks[task_id]["status"] = "running"
+    daily_report_tasks[task_id]["started_at"] = datetime.now(timezone(timedelta(hours=8))).isoformat()
+    try:
+        with daily_report_lock:
+            result = run_daily_report(env_overrides)
+        daily_report_tasks[task_id]["status"] = "succeeded"
+        daily_report_tasks[task_id]["result"] = result
+    except Exception as exc:
+        print(f"❌ [云端日报任务失败]: {exc}")
+        daily_report_tasks[task_id]["status"] = "failed"
+        daily_report_tasks[task_id]["error"] = str(exc)
+    finally:
+        daily_report_tasks[task_id]["finished_at"] = datetime.now(timezone(timedelta(hours=8))).isoformat()
+
+
+@app.post("/tasks/daily-report")
+async def daily_report_endpoint(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_task_token: str | None = Header(default=None),
+):
+    """GitHub Actions 调用的云端日报任务入口。"""
+    validate_daily_report_task_token(x_task_token)
+
+    from cloud_daily_report import DailyReportError
 
     payload = await request.json()
     env_overrides = payload.get("env", {}) if isinstance(payload, dict) else {}
@@ -517,13 +545,32 @@ async def daily_report_endpoint(request: Request, x_task_token: str | None = Hea
     }
 
     try:
-        with daily_report_lock:
-            return run_daily_report(sanitized_overrides)
+        task_id = uuid.uuid4().hex
+        daily_report_tasks[task_id] = {
+            "status": "queued",
+            "created_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+            "report_date": sanitized_overrides.get("REPORT_DATE"),
+        }
+        # Keep only the latest task records so the long-running web service does not grow memory unbounded.
+        for old_task_id in list(daily_report_tasks.keys())[:-20]:
+            daily_report_tasks.pop(old_task_id, None)
+        background_tasks.add_task(run_daily_report_task, task_id, sanitized_overrides)
+        return {"status": "accepted", "task_id": task_id}
     except DailyReportError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         print(f"❌ [云端日报任务失败]: {exc}")
         raise HTTPException(status_code=500, detail=f"daily report task failed: {exc}") from exc
+
+
+@app.get("/tasks/daily-report/{task_id}")
+async def daily_report_status_endpoint(task_id: str, x_task_token: str | None = Header(default=None)):
+    """查询云端日报后台任务状态。"""
+    validate_daily_report_task_token(x_task_token)
+    task = daily_report_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="daily report task not found")
+    return task
     
 @app.get("/")
 @app.head("/")
