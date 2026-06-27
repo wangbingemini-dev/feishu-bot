@@ -484,7 +484,7 @@ async def daily_report_endpoint(request: Request, x_task_token: str | None = Hea
     if not expected_token or x_task_token != expected_token:
         raise HTTPException(status_code=403, detail="invalid task token")
 
-    from cloud_daily_report import run_daily_report
+    from cloud_daily_report import DailyReportError, run_daily_report
 
     payload = await request.json()
     env_overrides = payload.get("env", {}) if isinstance(payload, dict) else {}
@@ -517,8 +517,14 @@ async def daily_report_endpoint(request: Request, x_task_token: str | None = Hea
         if key in allowed_env_keys and value not in (None, "")
     }
 
-    with daily_report_lock:
-        return run_daily_report(sanitized_overrides)
+    try:
+        with daily_report_lock:
+            return run_daily_report(sanitized_overrides)
+    except DailyReportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        print(f"❌ [云端日报任务失败]: {exc}")
+        raise HTTPException(status_code=500, detail="daily report task failed") from exc
     
 @app.get("/")
 @app.head("/")
