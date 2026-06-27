@@ -4,3 +4,4 @@ requests
 pymysql
 apscheduler
 lark-oapi
+python-dotenv

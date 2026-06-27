@@ -10,9 +10,14 @@ from typing import Any
 
 import pymysql
 import requests
+from dotenv import load_dotenv
 
 
 TZ = timezone(timedelta(hours=8))
+DEFAULT_DOTENV_PATH = "/Users/wangbin/Desktop/智能体/Codex/.env"
+
+
+load_dotenv(os.environ.get("DAILY_REPORT_ENV_FILE", DEFAULT_DOTENV_PATH), override=False)
 
 
 class DailyReportError(RuntimeError):
@@ -26,17 +31,27 @@ def env(name: str, default: str | None = None, required: bool = False) -> str | 
     return value
 
 
+def env_any(names: list[str], default: str | None = None, required: bool = False) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    if required:
+        raise DailyReportError(f"缺少必要环境变量: {' 或 '.join(names)}")
+    return default
+
+
 def get_report_date() -> str:
     return env("REPORT_DATE") or datetime.now(TZ).strftime("%Y-%m-%d")
 
 
 def get_db_connection():
     return pymysql.connect(
-        host=env("DB_HOST", required=True),
-        port=int(env("DB_PORT", "4000") or "4000"),
-        user=env("DB_USER", required=True),
-        password=env("DB_PASS", required=True),
-        database=env("DB_NAME", "test") or "test",
+        host=env_any(["DB_HOST", "TIDB_HOST"], required=True),
+        port=int(env_any(["DB_PORT", "TIDB_PORT"], "4000") or "4000"),
+        user=env_any(["DB_USER", "TIDB_USER"], required=True),
+        password=env_any(["DB_PASS", "TIDB_PASSWORD"], required=True),
+        database=env_any(["DB_NAME", "TIDB_DATABASE"], "test") or "test",
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=False,
@@ -191,10 +206,13 @@ def summarize_rows(rows: list[dict[str, Any]], limit: int = 80) -> str:
 
 
 def call_ai_api(prompt: str) -> str:
-    api_key = env("SILICONFLOW_API_KEY", required=True)
-    model = env("DAILY_REPORT_MODEL", "deepseek-ai/DeepSeek-V3") or "deepseek-ai/DeepSeek-V3"
+    api_key = env_any(["SILICONFLOW_API_KEY", "LLM_API_KEY"], required=True)
+    if api_key == "your_llm_api_key":
+        raise DailyReportError("LLM_API_KEY 仍是占位符，请在 Render 中配置真实模型 API Key。")
+    base_url = (env_any(["SILICONFLOW_BASE_URL", "LLM_BASE_URL"], "https://api.siliconflow.cn/v1") or "").rstrip("/")
+    model = env_any(["DAILY_REPORT_MODEL", "LLM_MODEL"], "deepseek-ai/DeepSeek-V3") or "deepseek-ai/DeepSeek-V3"
     response = requests.post(
-        "https://api.siliconflow.cn/v1/chat/completions",
+        f"{base_url}/chat/completions",
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         json={
             "model": model,
@@ -287,7 +305,7 @@ def get_tenant_access_token() -> str:
 
 
 def send_feishu_message(text: str) -> dict[str, Any]:
-    chat_id = env("DAILY_REPORT_CHAT_ID", required=True)
+    chat_id = env_any(["DAILY_REPORT_CHAT_ID", "FEISHU_REPORT_RECEIVE_ID", "FEISHU_CHAT_ID"], required=True)
     token = get_tenant_access_token()
     response = requests.post(
         "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",

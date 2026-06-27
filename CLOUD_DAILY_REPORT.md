@@ -34,11 +34,19 @@ Web Service 和 Cron Job 都需要：
 
 Cron Job 额外需要：
 
-- `DAILY_REPORT_CHAT_ID`: 日报接收群的 `chat_id`
+- `DAILY_REPORT_CHAT_ID`: 日报接收群的 `chat_id`。也兼容现有 `.env` 中的 `FEISHU_REPORT_RECEIVE_ID`
 - `OBSIDIAN_GITHUB_TOKEN`: 有目标 Obsidian 仓库 contents 读写权限的 GitHub token
 - `OBSIDIAN_GITHUB_REPO`: Obsidian Vault 仓库，例如 `owner/obsidian-vault`
 - `OBSIDIAN_GITHUB_BRANCH`: 默认 `main`
 - `OBSIDIAN_REPORT_DIR`: 默认 `工作日报`
+
+已有 `/Users/wangbin/Desktop/智能体/Codex/.env` 的命名也被兼容：
+
+- `TIDB_HOST` / `TIDB_PORT` / `TIDB_USER` / `TIDB_PASSWORD` / `TIDB_DATABASE`
+- `FEISHU_REPORT_RECEIVE_ID`
+- `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`
+
+本地运行时会自动读取 `/Users/wangbin/Desktop/智能体/Codex/.env`。Render 云端不能直接读取 Mac 本地路径，需要在 Render Cron Job 的 Environment Variables 中导入这些变量。
 
 可选：
 
