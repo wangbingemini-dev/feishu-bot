@@ -15,36 +15,70 @@ jobs:
   daily-report:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      REPORT_DATE: ${{ inputs.report_date }}
-      TIDB_HOST: ${{ secrets.TIDB_HOST }}
-      TIDB_PORT: ${{ secrets.TIDB_PORT }}
-      TIDB_USER: ${{ secrets.TIDB_USER }}
-      TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
-      TIDB_DATABASE: ${{ secrets.TIDB_DATABASE }}
-      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
-      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-      FEISHU_REPORT_RECEIVE_ID: ${{ secrets.FEISHU_REPORT_RECEIVE_ID }}
-      FEISHU_REPORT_RECEIVE_ID_TYPE: chat_id
-      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-      LLM_MODEL: ${{ secrets.LLM_MODEL }}
-      OBSIDIAN_GITHUB_REPO: ${{ secrets.OBSIDIAN_GITHUB_REPO }}
-      OBSIDIAN_GITHUB_BRANCH: ${{ secrets.OBSIDIAN_GITHUB_BRANCH }}
-      OBSIDIAN_GITHUB_TOKEN: ${{ secrets.OBSIDIAN_GITHUB_TOKEN }}
-      OBSIDIAN_REPORT_DIR: ${{ secrets.OBSIDIAN_REPORT_DIR }}
-      DAILY_REPORT_STABILITY_DEADLINE_MINUTES: "15"
-      DAILY_REPORT_STABILITY_INTERVAL_SECONDS: "60"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Trigger Render daily report service
+        env:
+          RENDER_DAILY_REPORT_URL: https://feishu-bot-lpg4.onrender.com/tasks/daily-report
+          TASK_TOKEN: ${{ secrets.FEISHU_APP_SECRET }}
+          REPORT_DATE: ${{ inputs.report_date }}
+          TIDB_HOST: ${{ secrets.TIDB_HOST }}
+          TIDB_PORT: ${{ secrets.TIDB_PORT }}
+          TIDB_USER: ${{ secrets.TIDB_USER }}
+          TIDB_PASSWORD: ${{ secrets.TIDB_PASSWORD }}
+          TIDB_DATABASE: ${{ secrets.TIDB_DATABASE }}
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_REPORT_RECEIVE_ID: ${{ secrets.FEISHU_REPORT_RECEIVE_ID }}
+          FEISHU_REPORT_RECEIVE_ID_TYPE: chat_id
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          OBSIDIAN_GITHUB_REPO: ${{ secrets.OBSIDIAN_GITHUB_REPO }}
+          OBSIDIAN_GITHUB_BRANCH: ${{ secrets.OBSIDIAN_GITHUB_BRANCH }}
+          OBSIDIAN_GITHUB_TOKEN: ${{ secrets.OBSIDIAN_GITHUB_TOKEN }}
+          OBSIDIAN_REPORT_DIR: ${{ secrets.OBSIDIAN_REPORT_DIR }}
+          DAILY_REPORT_STABILITY_DEADLINE_MINUTES: "15"
+          DAILY_REPORT_STABILITY_INTERVAL_SECONDS: "60"
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run daily report
-        run: python cloud_daily_report.py
+          keys = [
+              "REPORT_DATE",
+              "TIDB_HOST",
+              "TIDB_PORT",
+              "TIDB_USER",
+              "TIDB_PASSWORD",
+              "TIDB_DATABASE",
+              "FEISHU_APP_ID",
+              "FEISHU_APP_SECRET",
+              "FEISHU_REPORT_RECEIVE_ID",
+              "FEISHU_REPORT_RECEIVE_ID_TYPE",
+              "LLM_BASE_URL",
+              "LLM_MODEL",
+              "OBSIDIAN_GITHUB_REPO",
+              "OBSIDIAN_GITHUB_BRANCH",
+              "OBSIDIAN_GITHUB_TOKEN",
+              "OBSIDIAN_REPORT_DIR",
+              "DAILY_REPORT_STABILITY_DEADLINE_MINUTES",
+              "DAILY_REPORT_STABILITY_INTERVAL_SECONDS",
+          ]
+          payload = {"env": {key: os.environ[key] for key in keys if os.environ.get(key)}}
+          request = urllib.request.Request(
+              os.environ["RENDER_DAILY_REPORT_URL"],
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "X-Task-Token": os.environ["TASK_TOKEN"],
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=1800) as response:
+                  print(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              print(exc.read().decode("utf-8"))
+              raise
+          PY

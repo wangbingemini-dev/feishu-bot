@@ -6,7 +6,7 @@ import pymysql
 import re
 import threading
 from datetime import datetime, timezone, timedelta
-from fastapi import FastAPI, BackgroundTasks, Header, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Header, HTTPException, Request
 
 # 👇 引入飞书官方 SDK（用于长链接）
 import lark_oapi as lark
@@ -29,6 +29,7 @@ WIKI_TOKEN = "Re61wxHP9iO5NFk6IshckxNYnKc"
 
 history_memory = {}
 processed_message_ids = set()
+daily_report_lock = threading.Lock()
 
 # ================= 2. 飞书数据地图 =================
 TABLE_CONFIGS = [
@@ -477,15 +478,47 @@ def force_sync_endpoint(background_tasks: BackgroundTasks):
     }
 
 @app.post("/tasks/daily-report")
-def daily_report_endpoint(x_task_token: str | None = Header(default=None)):
-    """受保护的手动触发接口，方便 Render 外部健康检查或临时补跑。"""
-    expected_token = os.environ.get("DAILY_REPORT_TASK_TOKEN")
-    if expected_token and x_task_token != expected_token:
+async def daily_report_endpoint(request: Request, x_task_token: str | None = Header(default=None)):
+    """GitHub Actions 调用的云端日报任务入口。"""
+    expected_token = os.environ.get("DAILY_REPORT_TASK_TOKEN") or os.environ.get("FEISHU_APP_SECRET")
+    if not expected_token or x_task_token != expected_token:
         raise HTTPException(status_code=403, detail="invalid task token")
 
     from cloud_daily_report import run_daily_report
 
-    return run_daily_report()
+    payload = await request.json()
+    env_overrides = payload.get("env", {}) if isinstance(payload, dict) else {}
+    if not isinstance(env_overrides, dict):
+        raise HTTPException(status_code=400, detail="env must be an object")
+
+    allowed_env_keys = {
+        "REPORT_DATE",
+        "TIDB_HOST",
+        "TIDB_PORT",
+        "TIDB_USER",
+        "TIDB_PASSWORD",
+        "TIDB_DATABASE",
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_REPORT_RECEIVE_ID",
+        "FEISHU_REPORT_RECEIVE_ID_TYPE",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "OBSIDIAN_GITHUB_REPO",
+        "OBSIDIAN_GITHUB_BRANCH",
+        "OBSIDIAN_GITHUB_TOKEN",
+        "OBSIDIAN_REPORT_DIR",
+        "DAILY_REPORT_STABILITY_DEADLINE_MINUTES",
+        "DAILY_REPORT_STABILITY_INTERVAL_SECONDS",
+    }
+    sanitized_overrides = {
+        key: str(value)
+        for key, value in env_overrides.items()
+        if key in allowed_env_keys and value not in (None, "")
+    }
+
+    with daily_report_lock:
+        return run_daily_report(sanitized_overrides)
     
 @app.get("/")
 @app.head("/")

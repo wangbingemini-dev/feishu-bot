@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -22,6 +23,28 @@ load_dotenv(os.environ.get("DAILY_REPORT_ENV_FILE", DEFAULT_DOTENV_PATH), overri
 
 class DailyReportError(RuntimeError):
     pass
+
+
+@contextlib.contextmanager
+def temporary_env(overrides: dict[str, str | None] | None):
+    if not overrides:
+        yield
+        return
+
+    old_values: dict[str, str | None] = {}
+    try:
+        for key, value in overrides.items():
+            if value in (None, ""):
+                continue
+            old_values[key] = os.environ.get(key)
+            os.environ[key] = value
+        yield
+    finally:
+        for key, old_value in old_values.items():
+            if old_value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old_value
 
 
 def env(name: str, default: str | None = None, required: bool = False) -> str | None:
@@ -556,7 +579,12 @@ def maybe_sync_from_feishu() -> None:
         raise DailyReportError("日报前置飞书多维表格同步失败。")
 
 
-def run_daily_report() -> dict[str, Any]:
+def run_daily_report(env_overrides: dict[str, str | None] | None = None) -> dict[str, Any]:
+    with temporary_env(env_overrides):
+        return _run_daily_report()
+
+
+def _run_daily_report() -> dict[str, Any]:
     report_date = get_report_date()
     ensure_run_table()
     maybe_sync_from_feishu()
