@@ -354,6 +354,10 @@ def build_rule_based_report(sales_snapshot: dict[str, Any], chat_snapshot: dict[
 
 def build_report_markdown(sales_snapshot: dict[str, Any], chat_snapshot: dict[str, Any]) -> str:
     report_date = sales_snapshot["report_date"]
+    use_llm = (env("DAILY_REPORT_USE_LLM", "false") or "false").lower() in {"1", "true", "yes"}
+    if not use_llm:
+        return build_rule_based_report(sales_snapshot, chat_snapshot)
+
     chat_text = "\n".join(
         f"- {row.get('create_time')}: {row.get('message_text')}"
         for row in chat_snapshot.get("messages", [])
@@ -403,7 +407,7 @@ reconciliation: {json.dumps(sales_snapshot.get("reconciliation", {}), ensure_asc
 """
     try:
         markdown = call_ai_api(prompt)
-    except DailyReportError:
+    except Exception:
         markdown = build_rule_based_report(sales_snapshot, chat_snapshot)
     if not markdown.startswith(f"# {report_date} 工作日报"):
         markdown = f"# {report_date} 工作日报\n\n{markdown}"

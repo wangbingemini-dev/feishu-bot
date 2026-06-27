@@ -502,12 +502,11 @@ async def daily_report_endpoint(request: Request, x_task_token: str | None = Hea
         "FEISHU_APP_SECRET",
         "FEISHU_REPORT_RECEIVE_ID",
         "FEISHU_REPORT_RECEIVE_ID_TYPE",
-        "LLM_BASE_URL",
-        "LLM_MODEL",
         "OBSIDIAN_GITHUB_REPO",
         "OBSIDIAN_GITHUB_BRANCH",
         "OBSIDIAN_GITHUB_TOKEN",
         "OBSIDIAN_REPORT_DIR",
+        "DAILY_REPORT_USE_LLM",
         "DAILY_REPORT_STABILITY_DEADLINE_MINUTES",
         "DAILY_REPORT_STABILITY_INTERVAL_SECONDS",
     }
