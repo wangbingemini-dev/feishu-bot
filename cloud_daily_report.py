@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -291,6 +292,95 @@ def top_rows(rows: list[dict[str, Any]], field: str, limit: int = 5) -> list[dic
     return sorted(rows, key=lambda row: number_value(row.get(field)), reverse=True)[:limit]
 
 
+def clean_chat_message(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            payload = json.loads(text)
+            title = payload.get("title")
+            if title:
+                return str(title).replace("\n", " ").strip()
+        except Exception:
+            return ""
+    text = re.sub(r"@\S+", "", text)
+    text = re.sub(r"\[图片\]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text or text in {"请升级至最新版本客户端，以查看内容"}:
+        return ""
+    return text
+
+
+def summarize_chat_operations(messages: list[str]) -> list[str]:
+    cleaned = [clean_chat_message(message) for message in messages]
+    cleaned = [message for message in cleaned if message]
+    if not cleaned:
+        return ["暂无明确记录"]
+
+    buckets = [
+        (
+            "订单与履约异常",
+            ("订单", "延迟发货", "取消发货", "违约", "发货", "店铺都搜不到"),
+            "跟进订单履约、违约单和异常订单核对，需确认订单状态、店铺匹配关系及后续处理动作。",
+        ),
+        (
+            "库存与周转监控",
+            ("库存", "周转", "在途", "滞销", "库龄", "退货风险"),
+            "复盘净水器库存周转、在途到货和长库龄风险，重点关注高周转天数型号及潜在退货风险。",
+        ),
+        (
+            "数据文件与监控表",
+            ("文件", ".xlsx", "监控表", "明细", "供货价"),
+            "整理并分发销售、违约单、供货价等监控文件，为日报、周报和经营复盘提供数据底稿。",
+        ),
+        (
+            "会议与复盘安排",
+            ("复盘", "周度", "准备", "资料", "16点", "17点", "备注"),
+            "推进周度复盘和资料准备，明确会议时间、责任人提醒及会前备注事项。",
+        ),
+        (
+            "商品上架与状态核对",
+            ("上架", "滤芯", "商品中心", "产品上架", "状态通知"),
+            "跟进净水器产品上架状态，并核对关联滤芯等商品配置是否正常。",
+        ),
+        (
+            "经营分析与改善建议",
+            ("经营分析", "仪表盘", "洞察", "建议", "销售", "转化率", "访客"),
+            "查看经营分析仪表盘，对低销量、低转化和异常销售波动进行原因排查并形成改善方向。",
+        ),
+    ]
+
+    summary_lines: list[str] = []
+    used_indexes: set[int] = set()
+    for _title, keywords, summary in buckets:
+        matched = [
+            index
+            for index, message in enumerate(cleaned)
+            if index not in used_indexes and any(keyword in message for keyword in keywords)
+        ]
+        if matched:
+            used_indexes.update(matched)
+            summary_lines.append(f"- {summary}")
+
+    followups = []
+    for message in cleaned:
+        if any(keyword in message for keyword in ("上午", "下午", "今天", "明天", "要", "需", "准备", "发给我")):
+            compact = message
+            if len(compact) > 48:
+                compact = compact[:48].rstrip("，。；; ") + "..."
+            followups.append(compact)
+    if followups:
+        unique_followups = list(dict.fromkeys(followups))[:3]
+        summary_lines.append(f"- 待跟进事项：{'；'.join(unique_followups)}。")
+
+    if not summary_lines:
+        summary_lines.append(f"- 当天共有 {len(cleaned)} 条有效沟通记录，主要围绕运营数据确认、事项同步和后续跟进展开。")
+    if len(cleaned) > len(used_indexes):
+        summary_lines.append(f"- 其余沟通记录已归档至 TiDB，未直接复制进日报正文。")
+    return summary_lines
+
+
 def build_rule_based_report(sales_snapshot: dict[str, Any], chat_snapshot: dict[str, Any]) -> str:
     report_date = sales_snapshot["report_date"]
     daily_gsv = sales_snapshot["daily_category_gsv"]
@@ -329,13 +419,7 @@ def build_rule_based_report(sales_snapshot: dict[str, Any], chat_snapshot: dict[
         lines.append("")
 
     lines.extend(["## 二、当天运营动作汇总", ""])
-    if messages:
-        for msg in messages[:12]:
-            lines.append(f"- {msg}")
-        if len(messages) > 12:
-            lines.append(f"- 其余 {len(messages) - 12} 条聊天记录已归档至 TiDB。")
-    else:
-        lines.append("- 暂无明确记录")
+    lines.extend(summarize_chat_operations(messages))
 
     lines.extend(
         [
