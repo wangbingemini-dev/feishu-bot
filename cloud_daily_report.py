@@ -566,13 +566,28 @@ def write_obsidian_markdown(report_date: str, markdown: str) -> dict[str, Any]:
     if put_response.status_code not in (200, 201):
         raise DailyReportError(f"写入 Obsidian GitHub 文件失败: {put_response.status_code} {put_response.text}")
 
-    verify_response = requests.get(url, headers=headers, params={"ref": branch}, timeout=30)
-    verify_response.raise_for_status()
-    content = base64.b64decode(verify_response.json()["content"]).decode("utf-8")
-    if content != markdown:
-        raise DailyReportError("Obsidian GitHub 文件写入后复核不一致，已停止飞书发送。")
+    put_data = put_response.json()
+    commit = put_data.get("commit", {})
+    commit_sha = commit.get("sha")
 
-    return {"repo": repo, "branch": branch, "path": path, "commit": put_response.json().get("commit", {})}
+    verify_refs = [ref for ref in [commit_sha, branch] if ref]
+    last_verify_error = ""
+    for attempt in range(8):
+        for verify_ref in verify_refs:
+            verify_response = requests.get(url, headers=headers, params={"ref": verify_ref}, timeout=30)
+            if verify_response.status_code == 404:
+                last_verify_error = f"404 at ref {verify_ref}"
+                continue
+            if verify_response.status_code != 200:
+                last_verify_error = f"{verify_response.status_code} {verify_response.text}"
+                continue
+            content = base64.b64decode(verify_response.json()["content"]).decode("utf-8")
+            if content != markdown:
+                raise DailyReportError("Obsidian GitHub 文件写入后复核不一致，已停止飞书发送。")
+            return {"repo": repo, "branch": branch, "path": path, "commit": commit}
+        time.sleep(min(2**attempt, 20))
+
+    raise DailyReportError(f"Obsidian GitHub 文件写入后复核失败: {last_verify_error}")
 
 
 def ensure_run_table() -> None:
