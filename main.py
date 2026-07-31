@@ -14,6 +14,8 @@ import lark_oapi as lark
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
+from runtime_flags import env_flag
+
 app = FastAPI()
 
 # ================= 1. 核心钥匙与环境变量 =================
@@ -350,6 +352,17 @@ def start_feishu_ws_client():
     cli.start()
 
 
+def start_feishu_chat_ws_if_enabled():
+    """仅在显式开启时启动旧聊天入口，避免与新版 Codex Bot 争抢消息。"""
+    if not env_flag("ENABLE_FEISHU_CHAT_WS"):
+        print("ℹ️ 旧飞书聊天长连接已关闭；飞书多维表格到 TiDB 的定时同步继续运行。")
+        return False
+
+    ws_thread = threading.Thread(target=start_feishu_ws_client, daemon=True)
+    ws_thread.start()
+    return True
+
+
 # ================= 7. 服务启动与防休眠 =================
 
 scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
@@ -367,9 +380,8 @@ def on_startup():
     
     scheduler.start()
     
-    # 启动长链接线程
-    ws_thread = threading.Thread(target=start_feishu_ws_client, daemon=True)
-    ws_thread.start()
+    # 旧聊天入口默认关闭；数据同步调度不受影响。
+    start_feishu_chat_ws_if_enabled()
 
 # ================= 5.5 新增：飞书多维表格全量同步中枢 =================
 
