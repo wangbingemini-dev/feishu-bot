@@ -588,4 +588,8 @@ async def daily_report_status_endpoint(task_id: str, x_task_token: str | None = 
 @app.head("/")
 def health_check():
     """保留这个根目录用于响应 Render 的存活健康检查"""
-    return {"status": "Xavier is alive and WebSocket is connected!"}
+    return {
+        "status": "Xavier service is alive",
+        "legacy_chat_websocket_enabled": env_flag("ENABLE_FEISHU_CHAT_WS"),
+        "bitable_tidb_sync_enabled": True,
+    }

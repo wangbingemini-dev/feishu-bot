@@ -51,6 +51,18 @@ class FeishuChatWebSocketToggleTests(unittest.TestCase):
         self.assertIn("key: ENABLE_FEISHU_CHAT_WS", render_text)
         self.assertIn('value: "false"', render_text)
 
+    def test_health_check_reports_chat_and_sync_status_separately(self):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        health_check = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "health_check"
+        )
+        health_source = ast.unparse(health_check)
+        self.assertIn("'legacy_chat_websocket_enabled'", health_source)
+        self.assertIn("'bitable_tidb_sync_enabled': True", health_source)
+
 
 if __name__ == "__main__":
     unittest.main()
